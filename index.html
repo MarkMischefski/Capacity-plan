@@ -106,7 +106,7 @@
 
   .content {
     padding: 16px;
-    padding-bottom: 40px;
+    padding-bottom: 100px;
   }
 
   .stock-card {
@@ -281,24 +281,90 @@
     white-space: nowrap;
   }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  .bottom-nav {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    display: flex;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    padding-bottom: env(safe-area-inset-bottom);
+    z-index: 50;
+  }
+  .nav-btn {
+    flex: 1;
+    text-align: center;
+    padding: 9px 0 7px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .nav-btn .ti { display: block; font-size: 20px; margin-bottom: 2px; }
+  .nav-btn.active { color: var(--accent); }
+
+  .today-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+  }
+  .today-row .grade-name { flex: 1; font-size: 14px; font-weight: 600; }
+  .today-row .grade-sub  { font-size: 11px; color: var(--faint); margin-top: 1px; }
+  .today-row .today-input {
+    width: 64px;
+    text-align: center;
+    font-family: var(--mono);
+    font-size: 16px;
+    padding: 9px 4px;
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: 8px;
+    color: var(--text);
+  }
+  .today-row .today-input.actual { border-color: var(--accent); }
+
 </style>
 </head>
 <body>
 
   <div class="header">
-    <h1>Block <span>Stock</span></h1>
+    <h1 id="page-title">Block <span>Stock</span></h1>
     <div class="branch-name" id="branch-name-display">Loading…</div>
   </div>
 
-  <div class="grade-tabs" id="grade-tabs"></div>
-
-  <div class="content" id="content">
-    <div class="empty-state">
-      <div>Loading stock data…</div>
+  <!-- ══ STOCK PAGE ══ -->
+  <div id="page-stock">
+    <div class="grade-tabs" id="grade-tabs"></div>
+    <div class="content" id="content">
+      <div class="empty-state">
+        <div>Loading stock data…</div>
+      </div>
     </div>
   </div>
 
-  <div class="status-bar" id="status-bar">Connecting…</div>
+  <!-- ══ TODAY'S PRODUCTION PAGE ══ -->
+  <div id="page-today" style="display:none;">
+    <div class="content" id="today-content">
+      <div class="empty-state">
+        <div>Loading…</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bottom-nav">
+    <div class="nav-btn active" id="nav-stock-btn" onclick="showPage('stock')">
+      <i class="ti ti-package"></i>Stock
+    </div>
+    <div class="nav-btn" id="nav-today-btn" onclick="showPage('today')">
+      <i class="ti ti-calendar-event"></i>Today
+    </div>
+  </div>
+
+  <div class="status-bar" id="status-bar" style="bottom:52px;">Connecting…</div>
 
   <!-- Opening stock / stocktake modal -->
   <div class="modal-overlay" id="modal-overlay">
@@ -508,6 +574,39 @@ function getForecastForWeek(bn, grade, workDayDates) {
   }, 0);
 }
 
+// Same visibility rule as desktop: a grade is relevant if it has any outstanding
+// job requirement in the next 4 weeks (desktop's totalReq window), regardless
+// of whether mobile only displays 2 weeks of input boxes.
+function gradeHasRequirement(bn, grade) {
+  const mat = (settings.branchMaterial || {})[bn] || {};
+  const blockM3 = parseFloat(mat.blockM3) || 0;
+  const wasteFac = 1 - ((parseFloat(mat.wastePct)||0)/100);
+  if (!(blockM3 > 0 && wasteFac > 0)) return false;
+  const stMap = Object.fromEntries(stockItems.map(s => [s.stockcode, s]));
+  const slMap = Object.fromEntries(salesLines.map(l => [Number(l.solineid), l]));
+  const mMap  = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
+
+  const fourWeekDays = [];
+  for (let i = 0; i < 4; i++) {
+    getWeekDates(i).slice(0, 5).forEach(d => fourWeekDays.push(fmtDateLocal(d)));
+  }
+
+  let cubic = 0;
+  schedule.filter(j =>
+    (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4) &&
+    fourWeekDays.includes(j.startdate)
+  ).forEach(j => {
+    const m = mMap[Number(j.machineno)];
+    if (!m || Number(m.branchno) !== bn) return;
+    const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
+    const st = stMap[sl.stockcode];
+    if (!st || (st.x_grade||'').trim() !== grade || !parseFloat(st.x_cubic)) return;
+    const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
+    cubic += parseFloat(st.x_cubic) * Math.max(0, lq);
+  });
+  return cubic > 0;
+}
+
 function calcBlockStock(branchNo, grade) {
   const bn = Number(branchNo);
   const entries = blockStockEntries
@@ -566,7 +665,16 @@ function calcBlockStock(branchNo, grade) {
 function renderGradeTabs() {
   const allGradesRaw = [...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))].sort();
   const excluded = new Set(settings.excludedGrades || []);
-  const grades = allGradesRaw.filter(g => !excluded.has(g));
+  const bn = settings.branchNo;
+
+  // Same visibility rule as desktop: show a grade only if it has tracked stock
+  // (an opening count entered) OR an outstanding job requirement in the next
+  // 4 weeks. Hides grades that are neither stocked nor currently needed.
+  const grades = allGradesRaw.filter(g => {
+    if (excluded.has(g)) return false;
+    const hasStock = calcBlockStock(bn, g) !== null;
+    return hasStock || gradeHasRequirement(bn, g);
+  });
 
   if (!activeGrade || !grades.includes(activeGrade)) activeGrade = grades[0] || null;
 
@@ -574,6 +682,17 @@ function renderGradeTabs() {
   tabsEl.innerHTML = grades.map(g => `
     <div class="grade-tab ${g === activeGrade ? 'active' : ''}" onclick="selectGrade('${g}')">${displayGrade(g)}</div>
   `).join('');
+}
+
+function showPage(page) {
+  document.getElementById('page-stock').style.display = page === 'stock' ? 'block' : 'none';
+  document.getElementById('page-today').style.display  = page === 'today' ? 'block' : 'none';
+  document.getElementById('nav-stock-btn').classList.toggle('active', page === 'stock');
+  document.getElementById('nav-today-btn').classList.toggle('active', page === 'today');
+  document.getElementById('page-title').innerHTML = page === 'stock'
+    ? 'Block <span>Stock</span>'
+    : 'Today\'s <span>Production</span>';
+  if (page === 'today') renderTodayPage();
 }
 
 function selectGrade(g) {
@@ -683,6 +802,70 @@ function renderContent() {
 // ══════════════════════════════════════════════
 // SAVE DAY INPUT (override forecast / record actual)
 // ══════════════════════════════════════════════
+// ══════════════════════════════════════════════
+// TODAY'S PRODUCTION PAGE — all grades on one screen, single input each
+// ══════════════════════════════════════════════
+function renderTodayPage() {
+  const el = document.getElementById('today-content');
+  const bn = settings.branchNo;
+  const today = todayLocal();
+
+  const allGradesRaw = [...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))].sort();
+  const excluded = new Set(settings.excludedGrades || []);
+  const grades = allGradesRaw.filter(g => {
+    if (excluded.has(g)) return false;
+    const hasStock = calcBlockStock(bn, g) !== null;
+    return hasStock || gradeHasRequirement(bn, g);
+  });
+
+  if (!grades.length) {
+    el.innerHTML = `<div class="empty-state"><i class="ti ti-calendar-event"></i><div>No grades to show</div></div>`;
+    return;
+  }
+
+  const rows = grades.map(g => {
+    const actual = getActualProduction(bn, g, today);
+    const tmpl = getTemplateQty(bn, g, today);
+    const qty = actual !== null ? actual.qty : tmpl;
+    const cls = actual !== null ? 'actual' : '';
+    const sub = actual !== null ? 'Entered' : 'From template — tap to confirm';
+    return `
+      <div class="today-row">
+        <div>
+          <div class="grade-name">${displayGrade(g)}</div>
+          <div class="grade-sub">${sub}</div>
+        </div>
+        <input type="number" min="0" inputmode="numeric" class="today-input ${cls}" value="${qty}"
+          onchange="saveTodayProduction('${g}', this.value)">
+      </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">
+      ${new Date().toLocaleDateString('en-NZ', { weekday: 'long', day: 'numeric', month: 'long' })} — ${branchName(bn)}
+    </div>
+    ${rows}
+    <div style="font-size:11px;color:var(--faint);margin-top:8px;text-align:center;">
+      Missed a day? Go to the Stock tab to enter past production for that grade.
+    </div>`;
+}
+
+async function saveTodayProduction(grade, qty) {
+  const bn = settings.branchNo;
+  const today = todayLocal();
+  const qtyInt = parseInt(qty) || 0;
+
+  const existing = blockProduction.find(
+    p => Number(p.branch_no) === Number(bn) && p.grade === grade && p.production_date === today
+  );
+  if (existing) await sbDelete('block_production', existing.id);
+  await sbInsert('block_production', { branch_no: Number(bn), grade, production_date: today, qty: qtyInt, notes: 'Actual production' });
+
+  showToast('Saved');
+  await loadAllData();
+  renderTodayPage();
+}
+
 async function saveDayForecast(grade, dateStr, qty, isFuture) {
   const bn = settings.branchNo;
   const qtyInt = parseInt(qty) || 0;
@@ -819,7 +1002,9 @@ async function init() {
   const ok = await loadAllData();
   if (ok) {
     renderGradeTabs();
-    renderContent();
+    const onTodayPage = document.getElementById('page-today').style.display !== 'none';
+    if (onTodayPage) renderTodayPage();
+    else renderContent();
   }
 }
 
