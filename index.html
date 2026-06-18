@@ -781,6 +781,7 @@ function renderContent() {
           <div class="day-dow ${isToday?'today':''}">${dow}</div>
           <input type="number" min="0" inputmode="numeric" class="day-input ${cls}" value="${qty}"
             ${isPast ? 'disabled' : ''}
+            onfocus="this.select()"
             onchange="saveDayForecast('${grade}','${d}',this.value,${isFuture})">
           <div class="day-sub">${subLabel}</div>
         </div>`;
