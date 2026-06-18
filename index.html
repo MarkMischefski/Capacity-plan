@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Block Stock</title>
+
+<!-- PWA manifest -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0a0e17">
+
+<!-- iOS "Add to Home Screen" support -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Block Stock">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+
+<!-- Android / general -->
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
+
+<style>
+  :root {
+    --bg:        #0a0e17;
+    --surface:   #121826;
+    --card:      #161d2e;
+    --border:    #232b3d;
+    --border2:   #2a3244;
+    --accent:    #f97316;
+    --accent2:   #ea580c;
+    --green:     #22c55e;
+    --amber:     #f59e0b;
+    --red:       #ef4444;
+    --blue:      #3b82f6;
+    --text:      #e8ecf4;
+    --muted:     #8892a4;
+    --faint:     #4a556a;
+    --mono:      'JetBrains Mono', monospace;
+    --sans:      -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+  html, body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 15px;
+    min-height: 100vh;
+    /* Respect notches / home indicator on iOS */
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    -webkit-user-select: none;
+    user-select: none;
+    overscroll-behavior-y: contain;
+  }
+
+  input, select { -webkit-user-select: text; user-select: text; }
+
+  .header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 16px;
+    padding-top: calc(14px + env(safe-area-inset-top));
+  }
+  .header h1 {
+    font-size: 18px;
+    font-weight: 700;
+  }
+  .header h1 span { color: var(--accent); }
+  .header .branch-name {
+    font-size: 13px;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+
+  .grade-tabs {
+    display: flex;
+    gap: 6px;
+    overflow-x: auto;
+    padding: 10px 16px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    -webkit-overflow-scrolling: touch;
+  }
+  .grade-tabs::-webkit-scrollbar { display: none; }
+  .grade-tab {
+    flex-shrink: 0;
+    padding: 7px 14px;
+    border-radius: 16px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+    background: var(--card);
+    border: 1px solid var(--border2);
+    white-space: nowrap;
+  }
+  .grade-tab.active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+
+  .content {
+    padding: 16px;
+    padding-bottom: 40px;
+  }
+
+  .stock-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 14px;
+  }
+
+  .stock-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 14px;
+  }
+  .stock-label { font-size: 11px; color: var(--faint); text-transform: uppercase; letter-spacing: 0.4px; }
+  .stock-val   { font-family: var(--mono); font-size: 30px; font-weight: 700; line-height: 1; margin-top: 3px; }
+
+  .qty-actions {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+  .qty-btn {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    color: var(--text);
+    padding: 10px 8px;
+    border-radius: 8px;
+    font-size: 12.5px;
+    font-weight: 600;
+    text-align: center;
+  }
+  .qty-btn:active { background: var(--border2); }
+  .qty-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .qty-btn.primary:active { background: var(--accent2); }
+
+  .week-block {
+    margin-top: 16px;
+  }
+  .week-block-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    margin-bottom: 8px;
+    display: flex;
+    justify-content: space-between;
+  }
+  .week-block-title .req-fcast { font-family: var(--mono); font-weight: 600; color: var(--faint); text-transform: none; }
+
+  .day-row {
+    display: flex;
+    gap: 6px;
+  }
+  .day-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+  }
+  .day-dow {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    color: var(--muted);
+  }
+  .day-dow.today { color: var(--accent); }
+  .day-input {
+    width: 100%;
+    text-align: center;
+    font-family: var(--mono);
+    font-size: 14px;
+    padding: 8px 2px;
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: 6px;
+    color: var(--text);
+  }
+  .day-input:disabled { opacity: 0.4; }
+  .day-input.override { border-color: var(--blue); }
+  .day-input.actual    { border-color: var(--accent); }
+  .day-sub {
+    font-size: 8px;
+    color: var(--faint);
+    height: 10px;
+  }
+
+  .empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--muted);
+  }
+  .empty-state .ti { font-size: 36px; color: var(--faint); margin-bottom: 10px; }
+
+  .status-bar {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    padding: 8px 16px;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
+    font-size: 11px;
+    color: var(--faint);
+    text-align: center;
+    z-index: 5;
+  }
+
+  /* ── Modal ── */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 100;
+    display: none;
+    align-items: flex-end;
+  }
+  .modal-overlay.show { display: flex; }
+  .modal-sheet {
+    background: var(--surface);
+    border-radius: 16px 16px 0 0;
+    width: 100%;
+    padding: 20px 18px;
+    padding-bottom: calc(20px + env(safe-area-inset-bottom));
+  }
+  .modal-title { font-size: 16px; font-weight: 700; margin-bottom: 16px; }
+  .form-row { margin-bottom: 14px; }
+  .form-label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .form-input {
+    width: 100%;
+    background: var(--card);
+    border: 1px solid var(--border2);
+    color: var(--text);
+    padding: 11px 12px;
+    border-radius: 8px;
+    font-size: 15px;
+    font-family: var(--sans);
+  }
+  .modal-actions { display: flex; gap: 10px; margin-top: 18px; }
+  .btn {
+    flex: 1;
+    padding: 13px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    text-align: center;
+    border: none;
+  }
+  .btn.primary { background: var(--accent); color: #fff; }
+  .btn.secondary { background: var(--card); color: var(--muted); border: 1px solid var(--border2); }
+
+  .toast {
+    position: fixed;
+    bottom: 70px;
+    left: 50%;
+    transform: translateX(-50%) translateY(20px);
+    background: var(--card);
+    border: 1px solid var(--border2);
+    color: var(--text);
+    padding: 10px 18px;
+    border-radius: 20px;
+    font-size: 13px;
+    opacity: 0;
+    transition: opacity 0.2s, transform 0.2s;
+    pointer-events: none;
+    z-index: 200;
+    white-space: nowrap;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+
+  <div class="header">
+    <h1>Block <span>Stock</span></h1>
+    <div class="branch-name" id="branch-name-display">Loading…</div>
+  </div>
+
+  <div class="grade-tabs" id="grade-tabs"></div>
+
+  <div class="content" id="content">
+    <div class="empty-state">
+      <div>Loading stock data…</div>
+    </div>
+  </div>
+
+  <div class="status-bar" id="status-bar">Connecting…</div>
+
+  <!-- Opening stock / stocktake modal -->
+  <div class="modal-overlay" id="modal-overlay">
+    <div class="modal-sheet">
+      <div class="modal-title" id="modal-title">Enter opening stock</div>
+      <div class="form-row">
+        <div class="form-label">Date</div>
+        <input type="date" class="form-input" id="mf-date">
+      </div>
+      <div class="form-row">
+        <div class="form-label">Quantity (blocks)</div>
+        <input type="number" class="form-input" id="mf-qty" min="0" placeholder="0">
+      </div>
+      <div class="modal-actions">
+        <button class="btn secondary" onclick="closeModal()">Cancel</button>
+        <button class="btn primary" id="modal-save-btn" onclick="saveModal()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+// ══════════════════════════════════════════════
+// CONFIG — fill these in once per device, or set via Settings flow below
+// ══════════════════════════════════════════════
+const SUPA_URL_DEFAULT = 'https://jrpysikxibrbbellroid.supabase.co';
+
+let settings = {
+  supaUrl: '',
+  supaKey: '',
+  branchNo: null,        // fixed branch for this device
+  branchNames: {},
+  excludedGrades: [],
+  gradeNames: {},
+};
+
+function loadLocalSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('mobile_block_stock_settings') || 'null');
+    if (saved) settings = { ...settings, ...saved };
+  } catch(e) {}
+  if (!settings.supaUrl) settings.supaUrl = SUPA_URL_DEFAULT;
+}
+function saveLocalSettings() {
+  localStorage.setItem('mobile_block_stock_settings', JSON.stringify({
+    supaUrl: settings.supaUrl, supaKey: settings.supaKey, branchNo: settings.branchNo
+  }));
+}
+
+function supaHeaders() {
+  return { 'apikey': settings.supaKey, 'Authorization': `Bearer ${settings.supaKey}` };
+}
+
+// ══════════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════════
+let stockItems = [];               // capacity_stock_items — for grade list
+let blockStockEntries = [];
+let blockProduction = [];
+let blockAdjustments = [];
+let blockProductionTemplate = [];
+let schedule = [];
+let salesLines = [];
+let machines = [];
+let activeGrade = null;
+
+// ══════════════════════════════════════════════
+// DATE HELPERS (ported from desktop app)
+// ══════════════════════════════════════════════
+function fmtDateLocal(d) {
+  const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,'0'), dd = String(d.getDate()).padStart(2,'0');
+  return `${y}-${m}-${dd}`;
+}
+function todayLocal() { return fmtDateLocal(new Date()); }
+
+function getWeekDates(offsetWeeks) {
+  const now = new Date();
+  const dow = (now.getDay() + 6) % 7; // Mon=0
+  const monday = new Date(now);
+  monday.setDate(now.getDate() - dow + offsetWeeks * 7);
+  return Array.from({length: 7}, (_, i) => {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    return d;
+  });
+}
+
+function fmtShort(d) {
+  return d.toLocaleDateString('en-NZ', { day: 'numeric', month: 'short' });
+}
+
+const DOW_LABELS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+
+// ══════════════════════════════════════════════
+// SUPABASE FETCH / WRITE HELPERS
+// ══════════════════════════════════════════════
+async function sbFetch(table, params = '') {
+  const pageSize = 1000;
+  let all = [];
+  let offset = 0;
+  while (true) {
+    const res = await fetch(`${settings.supaUrl}/rest/v1/${table}?select=*${params}`, {
+      headers: { ...supaHeaders(), 'Range-Unit': 'items', 'Range': `${offset}-${offset+pageSize-1}` }
+    });
+    if (!res.ok) { console.warn(`fetch ${table} failed`, res.status); break; }
+    const page = await res.json();
+    all = all.concat(page);
+    if (page.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+async function sbInsert(table, row) {
+  const res = await fetch(`${settings.supaUrl}/rest/v1/${table}`, {
+    method: 'POST',
+    headers: { ...supaHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+    body: JSON.stringify(row),
+  });
+  if (!res.ok) console.error(`insert ${table} failed:`, res.status, await res.text());
+  return res.ok;
+}
+
+async function sbDelete(table, id) {
+  const res = await fetch(`${settings.supaUrl}/rest/v1/${table}?id=eq.${id}`, {
+    method: 'DELETE',
+    headers: { ...supaHeaders(), 'Prefer': 'return=minimal' },
+  });
+  return res.ok;
+}
+
+// ══════════════════════════════════════════════
+// LOAD ALL DATA
+// ══════════════════════════════════════════════
+async function loadAllData() {
+  setStatus('Loading…');
+  try {
+    const [si, bse, bp, ba, bpt, sch, sl, mc, sharedSettings] = await Promise.all([
+      sbFetch('capacity_stock_items'),
+      sbFetch('block_stock_entries'),
+      sbFetch('block_production'),
+      sbFetch('block_adjustments'),
+      sbFetch('block_production_template'),
+      sbFetch('capacity_schedule', '&iscomplete=in.(0,1,4)'),
+      sbFetch('capacity_sales_lines'),
+      sbFetch('capacity_machines'),
+      sbFetch('capacity_app_settings', '&id=eq.1'),
+    ]);
+    stockItems = si; blockStockEntries = bse; blockProduction = bp;
+    blockAdjustments = ba; blockProductionTemplate = bpt;
+    schedule = sch; salesLines = sl; machines = mc;
+
+    if (sharedSettings && sharedSettings.length) {
+      const shared = sharedSettings[0].settings || {};
+      settings.branchNames    = shared.branchNames    || {};
+      settings.excludedGrades = shared.excludedGrades || [];
+      settings.gradeNames     = shared.gradeNames      || {};
+      settings.branchMaterial = shared.branchMaterial  || {};
+    }
+    setStatus(`Updated ${new Date().toLocaleTimeString('en-NZ', {hour:'2-digit', minute:'2-digit'})}`);
+    return true;
+  } catch (e) {
+    console.error('loadAllData failed:', e);
+    setStatus('Connection error — pull down to retry');
+    return false;
+  }
+}
+
+function setStatus(msg) {
+  document.getElementById('status-bar').textContent = msg;
+}
+
+function displayGrade(g) {
+  return (settings.gradeNames && settings.gradeNames[g]) || g;
+}
+function branchName(bn) {
+  return (settings.branchNames && settings.branchNames[bn]) || `Branch ${bn}`;
+}
+
+// ══════════════════════════════════════════════
+// CORE CALC — ported faithfully from desktop calcBlockStock()
+// ══════════════════════════════════════════════
+function getTemplateQty(bn, grade, dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  const dow = (d.getDay() + 6) % 7;
+  const t = blockProductionTemplate.find(
+    t => Number(t.branch_no) === Number(bn) && t.grade === grade && t.day_of_week === dow
+  );
+  return t ? (t.qty || 0) : 0;
+}
+
+function getActualProduction(bn, grade, dateStr) {
+  const entry = blockProduction.find(
+    p => Number(p.branch_no) === Number(bn) && p.grade === grade && p.production_date === dateStr
+  );
+  return entry ? { qty: entry.qty, actual: true } : null;
+}
+
+function getForecastForWeek(bn, grade, workDayDates) {
+  const today = todayLocal();
+  return workDayDates.reduce((sum, d) => {
+    if (d <= today) return sum;
+    const actual = getActualProduction(bn, grade, d);
+    const qty = actual !== null ? actual.qty : getTemplateQty(bn, grade, d);
+    return sum + qty;
+  }, 0);
+}
+
+function calcBlockStock(branchNo, grade) {
+  const bn = Number(branchNo);
+  const entries = blockStockEntries
+    .filter(e => Number(e.branch_no) === bn && e.grade === grade)
+    .sort((a, b) => b.entry_date.localeCompare(a.entry_date));
+  if (!entries.length) return null;
+
+  const base = entries[0];
+  const baseDate = base.entry_date;
+  const baseQty = base.qty;
+
+  const todayStr = todayLocal();
+  let produced = 0;
+  for (let d = new Date(baseDate + 'T00:00:00'); fmtDateLocal(d) <= todayStr; d.setDate(d.getDate() + 1)) {
+    const dow = (d.getDay() + 6) % 7;
+    if (dow > 4) continue;
+    const dateStr = fmtDateLocal(d);
+    const actual = getActualProduction(bn, grade, dateStr);
+    produced += actual !== null ? actual.qty : getTemplateQty(bn, grade, dateStr);
+  }
+
+  const adjustments = blockAdjustments
+    .filter(a => Number(a.branch_no) === bn && a.grade === grade && a.adjustment_date >= baseDate)
+    .reduce((s, a) => s + (a.qty || 0), 0);
+
+  const mat = (settings.branchMaterial || {})[bn] || {};
+  const blockM3 = parseFloat(mat.blockM3) || 0;
+  const wasteFac = 1 - ((parseFloat(mat.wastePct) || 0) / 100);
+  const stockMap = Object.fromEntries(stockItems.map(s => [s.stockcode, s]));
+  const slMap = Object.fromEntries(salesLines.map(l => [Number(l.solineid), l]));
+  const machineMap = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
+
+  let usedBlocks = 0;
+  schedule
+    .filter(j => Number(j.iscomplete) === 1 && (j.completime || j.finishdate) >= baseDate)
+    .forEach(j => {
+      const m = machineMap[Number(j.machineno)];
+      if (!m || Number(m.branchno) !== bn) return;
+      const sl = slMap[Number(j.line_seqno)];
+      if (!sl) return;
+      const stock = stockMap[sl.stockcode];
+      if (!stock || (stock.x_grade || '').trim() !== grade) return;
+      if (!parseFloat(stock.x_cubic) || blockM3 === 0 || wasteFac <= 0) return;
+      const lineQty = (parseFloat(sl.ord_quant) || 0) - (parseFloat(sl.bkord_quant) || 0) - (parseFloat(sl.sup_quant) || 0);
+      const cubic = parseFloat(stock.x_cubic) * Math.max(0, lineQty);
+      usedBlocks += Math.ceil(cubic / (blockM3 * wasteFac));
+    });
+
+  const current = baseQty + produced + adjustments - usedBlocks;
+  return { baseQty, baseDate, produced, adjustments, usedBlocks, current };
+}
+
+// ══════════════════════════════════════════════
+// RENDER
+// ══════════════════════════════════════════════
+function renderGradeTabs() {
+  const allGradesRaw = [...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))].sort();
+  const excluded = new Set(settings.excludedGrades || []);
+  const grades = allGradesRaw.filter(g => !excluded.has(g));
+
+  if (!activeGrade || !grades.includes(activeGrade)) activeGrade = grades[0] || null;
+
+  const tabsEl = document.getElementById('grade-tabs');
+  tabsEl.innerHTML = grades.map(g => `
+    <div class="grade-tab ${g === activeGrade ? 'active' : ''}" onclick="selectGrade('${g}')">${displayGrade(g)}</div>
+  `).join('');
+}
+
+function selectGrade(g) {
+  activeGrade = g;
+  renderGradeTabs();
+  renderContent();
+}
+
+function renderContent() {
+  const el = document.getElementById('content');
+  const bn = settings.branchNo;
+
+  document.getElementById('branch-name-display').textContent = branchName(bn);
+
+  if (!activeGrade) {
+    el.innerHTML = `<div class="empty-state"><i class="ti ti-package" style="font-size:36px;"></i><div>No grades available</div></div>`;
+    return;
+  }
+
+  const grade = activeGrade;
+  const stock = calcBlockStock(bn, grade);
+  const currentStock = stock ? stock.current : 0;
+
+  const weeks2 = Array.from({length: 2}, (_, i) => {
+    const days = getWeekDates(i).slice(0, 5).map(d => fmtDateLocal(d));
+    const label = i === 0 ? 'This week' : 'Next week';
+    return { days, label };
+  });
+
+  const today = todayLocal();
+  const currentWeekStart = weeks2[0].days[0];
+
+  const weekBlocks = weeks2.map(wk => {
+    // Required (outstanding jobs this week, same logic as desktop)
+    const mat = (settings.branchMaterial || {})[bn] || {};
+    const blockM3 = parseFloat(mat.blockM3) || 0;
+    const wasteFac = 1 - ((parseFloat(mat.wastePct)||0)/100);
+    const stMap = Object.fromEntries(stockItems.map(s => [s.stockcode, s]));
+    const slMap = Object.fromEntries(salesLines.map(l => [Number(l.solineid), l]));
+    const mMap  = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
+
+    let cubic = 0;
+    schedule.filter(j =>
+      (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4) &&
+      wk.days.includes(j.startdate)
+    ).forEach(j => {
+      const m = mMap[Number(j.machineno)];
+      if (!m || Number(m.branchno) !== bn) return;
+      const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
+      const st = stMap[sl.stockcode];
+      if (!st || (st.x_grade||'').trim() !== grade || !parseFloat(st.x_cubic)) return;
+      const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
+      cubic += parseFloat(st.x_cubic) * Math.max(0, lq);
+    });
+    const required = (blockM3>0 && wasteFac>0 && cubic>0) ? Math.ceil(cubic/(blockM3*wasteFac)) : 0;
+    const forecast = getForecastForWeek(bn, grade, wk.days);
+
+    const dayCells = wk.days.map(d => {
+      const actual = getActualProduction(bn, grade, d);
+      const tmpl = getTemplateQty(bn, grade, d);
+      const isPast = d < currentWeekStart;
+      const isToday = d === today;
+      const isFuture = d > today;
+      const qty = actual !== null ? actual.qty : tmpl;
+      const isOverride = isFuture && actual !== null;
+      const dow = DOW_LABELS[(new Date(d+'T00:00:00').getDay()+6)%7];
+      const cls = isOverride ? 'override' : (!isFuture && actual !== null) ? 'actual' : '';
+      const subLabel = isPast ? '' : isToday ? 'today' : isOverride ? 'override' : 'template';
+      return `
+        <div class="day-col">
+          <div class="day-dow ${isToday?'today':''}">${dow}</div>
+          <input type="number" min="0" inputmode="numeric" class="day-input ${cls}" value="${qty}"
+            ${isPast ? 'disabled' : ''}
+            onchange="saveDayForecast('${grade}','${d}',this.value,${isFuture})">
+          <div class="day-sub">${subLabel}</div>
+        </div>`;
+    }).join('');
+
+    return `
+      <div class="week-block">
+        <div class="week-block-title">
+          <span>${wk.label}</span>
+          <span class="req-fcast">${required} req / ${forecast} fcast</span>
+        </div>
+        <div class="day-row">${dayCells}</div>
+      </div>`;
+  }).join('');
+
+  const stockCol = currentStock <= 0 ? 'var(--red)' : 'var(--text)';
+
+  el.innerHTML = `
+    <div class="stock-card">
+      <div class="stock-top">
+        <div>
+          <div class="stock-label">Current stock — ${displayGrade(grade)}</div>
+          <div class="stock-val" style="color:${stockCol}">${currentStock}</div>
+        </div>
+      </div>
+      <div class="qty-actions">
+        <div class="qty-btn" onclick="openModal('opening')"><i class="ti ti-clipboard-list"></i> Stocktake</div>
+        <div class="qty-btn primary" onclick="openModal('production')"><i class="ti ti-plus"></i> Add production</div>
+      </div>
+      ${weekBlocks}
+    </div>`;
+}
+
+// ══════════════════════════════════════════════
+// SAVE DAY INPUT (override forecast / record actual)
+// ══════════════════════════════════════════════
+async function saveDayForecast(grade, dateStr, qty, isFuture) {
+  const bn = settings.branchNo;
+  const qtyInt = parseInt(qty) || 0;
+  const noteStr = isFuture ? 'Forecast override' : 'Actual production';
+
+  const existing = blockProduction.find(
+    p => Number(p.branch_no) === Number(bn) && p.grade === grade && p.production_date === dateStr
+  );
+  if (existing) await sbDelete('block_production', existing.id);
+
+  if (qtyInt >= 0 && (!isFuture || qtyInt > 0)) {
+    await sbInsert('block_production', { branch_no: Number(bn), grade, production_date: dateStr, qty: qtyInt, notes: noteStr });
+  }
+  showToast('Saved');
+  await loadAllData();
+  renderContent();
+}
+
+// ══════════════════════════════════════════════
+// MODAL — opening stock (stocktake) / production entry
+// ══════════════════════════════════════════════
+let modalMode = null;
+function openModal(mode) {
+  modalMode = mode;
+  document.getElementById('modal-title').textContent = mode === 'opening' ? 'Enter stocktake count' : 'Add production';
+  document.getElementById('mf-date').value = todayLocal();
+  document.getElementById('mf-qty').value = '';
+  document.getElementById('modal-overlay').classList.add('show');
+}
+function closeModal() {
+  document.getElementById('modal-overlay').classList.remove('show');
+}
+
+async function saveModal() {
+  const bn = settings.branchNo;
+  const grade = activeGrade;
+  const dt = document.getElementById('mf-date').value;
+  const qty = parseInt(document.getElementById('mf-qty').value);
+  if (!dt || isNaN(qty)) { showToast('Enter a date and quantity'); return; }
+
+  const btn = document.getElementById('modal-save-btn');
+  btn.textContent = 'Saving…'; btn.disabled = true;
+
+  let ok = false;
+  if (modalMode === 'opening') {
+    // Same stocktake-reset behaviour as desktop: variance note, then clear
+    // entries up to and including the stocktake date (superseded by the
+    // physical count), keeping anything entered for days AFTER it.
+    let varianceNote = '';
+    if (dt <= todayLocal()) {
+      const priorStock = calcBlockStock(bn, grade);
+      if (priorStock) {
+        const variance = priorStock.current - qty;
+        if (variance !== 0) varianceNote = ` (variance ${variance > 0 ? '+' : ''}${variance} vs system: was ${priorStock.current})`;
+      }
+    }
+    ok = await sbInsert('block_stock_entries', { branch_no: bn, grade, entry_date: dt, qty, notes: 'Opening count' + varianceNote });
+    if (ok && dt <= todayLocal()) {
+      const prodToDelete = blockProduction.filter(p => Number(p.branch_no)===bn && p.grade===grade && p.production_date<=dt);
+      const adjToDelete  = blockAdjustments.filter(a => Number(a.branch_no)===bn && a.grade===grade && a.adjustment_date<=dt);
+      await Promise.all([
+        ...prodToDelete.map(r => sbDelete('block_production', r.id)),
+        ...adjToDelete.map(r => sbDelete('block_adjustments', r.id)),
+      ]);
+      const oldEntries = blockStockEntries.filter(e => Number(e.branch_no)===bn && e.grade===grade && e.entry_date < dt);
+      await Promise.all(oldEntries.map(e => sbDelete('block_stock_entries', e.id)));
+    }
+  } else if (modalMode === 'production') {
+    const isFuture = dt > todayLocal();
+    ok = await sbInsert('block_production', { branch_no: bn, grade, production_date: dt, qty, notes: isFuture ? 'Forecast override' : 'Actual production' });
+  }
+
+  btn.textContent = 'Save'; btn.disabled = false;
+  if (ok) {
+    closeModal();
+    showToast('Saved');
+    await loadAllData();
+    renderContent();
+  } else {
+    showToast('Save failed — check connection');
+  }
+}
+
+// ══════════════════════════════════════════════
+// TOAST
+// ══════════════════════════════════════════════
+let toastTimer = null;
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 1800);
+}
+
+// ══════════════════════════════════════════════
+// FIRST-RUN SETUP — ask for Supabase key + fixed branch if not configured
+// ══════════════════════════════════════════════
+async function ensureConfigured() {
+  if (settings.supaKey && settings.branchNo !== null) return true;
+
+  const key = settings.supaKey || prompt('Enter Supabase service/anon key for this device:');
+  if (!key) { setStatus('Setup required — reload to configure'); return false; }
+  settings.supaKey = key.trim();
+
+  if (settings.branchNo === null) {
+    // Try to load branch names from shared settings first for a friendlier prompt
+    try {
+      const res = await fetch(`${settings.supaUrl}/rest/v1/capacity_app_settings?id=eq.1&select=settings`, { headers: supaHeaders() });
+      if (res.ok) {
+        const rows = await res.json();
+        const shared = rows[0]?.settings || {};
+        settings.branchNames = shared.branchNames || {};
+      }
+    } catch(e) {}
+    const names = Object.entries(settings.branchNames).map(([no, name]) => `${no} = ${name}`).join('\n');
+    const branchInput = prompt(`Enter the branch number for this device:\n${names}`);
+    if (branchInput === null || branchInput.trim() === '') { setStatus('Setup required — reload to configure'); return false; }
+    settings.branchNo = parseInt(branchInput.trim());
+  }
+
+  saveLocalSettings();
+  return true;
+}
+
+// ══════════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════════
+async function init() {
+  loadLocalSettings();
+  const configured = await ensureConfigured();
+  if (!configured) return;
+
+  const ok = await loadAllData();
+  if (ok) {
+    renderGradeTabs();
+    renderContent();
+  }
+}
+
+// Pull-to-refresh feel: simple manual refresh on visibility/online events
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') init();
+});
+window.addEventListener('online', init);
+
+init();
+</script>
+
+<!-- Tabler icons for the small UI glyphs used above -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/@tabler/icons-webfont/3.31.0/tabler-icons.min.css">
+</body>
+</html>
