@@ -305,21 +305,36 @@
   .today-row {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
     background: var(--card);
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: 12px 14px;
-    margin-bottom: 10px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
   }
-  .today-row .grade-name { flex: 1; font-size: 14px; font-weight: 600; }
+  .today-row .grade-name { font-size: 13px; font-weight: 600; line-height: 1.25; }
   .today-row .grade-sub  { font-size: 11px; color: var(--faint); margin-top: 1px; }
+  .prod-day-inputs {
+    flex: 1;
+    display: flex;
+    gap: 6px;
+  }
+  .prod-daycol-head {
+    flex: 1;
+    text-align: center;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--muted);
+    line-height: 1.3;
+  }
+  .prod-daycol-head.today { color: var(--accent); }
   .today-row .today-input {
-    width: 64px;
+    flex: 1;
+    width: auto;
     text-align: center;
     font-family: var(--mono);
-    font-size: 16px;
-    padding: 9px 4px;
+    font-size: 15px;
+    padding: 9px 2px;
     background: var(--surface);
     border: 1px solid var(--border2);
     border-radius: 8px;
@@ -360,7 +375,7 @@
       <i class="ti ti-package"></i>Stock
     </div>
     <div class="nav-btn" id="nav-today-btn" onclick="showPage('today')">
-      <i class="ti ti-calendar-event"></i>Today
+      <i class="ti ti-calendar-event"></i>Production
     </div>
   </div>
 
@@ -691,7 +706,7 @@ function showPage(page) {
   document.getElementById('nav-today-btn').classList.toggle('active', page === 'today');
   document.getElementById('page-title').innerHTML = page === 'stock'
     ? 'Block <span>Stock</span>'
-    : 'Today\'s <span>Production</span>';
+    : '<span>Production</span>';
   if (page === 'today') renderTodayPage();
 }
 
@@ -803,12 +818,26 @@ function renderContent() {
 // SAVE DAY INPUT (override forecast / record actual)
 // ══════════════════════════════════════════════
 // ══════════════════════════════════════════════
-// TODAY'S PRODUCTION PAGE — all grades on one screen, single input each
+// PRODUCTION PAGE — all grades on one screen, today + previous 2 weekdays
 // ══════════════════════════════════════════════
+function getPrevWeekdays(count) {
+  // Returns the last `count` weekdays strictly before today, oldest first
+  const days = [];
+  let d = new Date();
+  while (days.length < count) {
+    d.setDate(d.getDate() - 1);
+    const dow = (d.getDay() + 6) % 7; // Mon=0..Sun=6
+    if (dow <= 4) days.unshift(fmtDateLocal(d));
+  }
+  return days;
+}
+
 function renderTodayPage() {
   const el = document.getElementById('today-content');
   const bn = settings.branchNo;
   const today = todayLocal();
+  const prevDays = getPrevWeekdays(2);
+  const allDays = [...prevDays, today]; // oldest -> today, left to right
 
   const allGradesRaw = [...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))].sort();
   const excluded = new Set(settings.excludedGrades || []);
@@ -823,43 +852,51 @@ function renderTodayPage() {
     return;
   }
 
+  const dayHeaderCells = allDays.map(d => {
+    const isToday = d === today;
+    const dow = new Date(d+'T00:00:00').toLocaleDateString('en-NZ', { weekday: 'short' });
+    const dnum = new Date(d+'T00:00:00').getDate();
+    return `<div class="prod-daycol-head ${isToday?'today':''}">${dow}<br>${dnum}</div>`;
+  }).join('');
+
   const rows = grades.map(g => {
-    const actual = getActualProduction(bn, g, today);
-    const tmpl = getTemplateQty(bn, g, today);
-    const qty = actual !== null ? actual.qty : tmpl;
-    const cls = actual !== null ? 'actual' : '';
-    const sub = actual !== null ? 'Entered' : 'From template — tap to confirm';
+    const dayCells = allDays.map(d => {
+      const isToday = d === today;
+      const actual = getActualProduction(bn, g, d);
+      const tmpl = getTemplateQty(bn, g, d);
+      const qty = actual !== null ? actual.qty : tmpl;
+      const cls = actual !== null ? 'actual' : '';
+      return `<input type="number" min="0" inputmode="numeric" class="today-input ${cls}" value="${qty}"
+        onfocus="this.select()" onchange="saveTodayProduction('${g}','${d}', this.value)">`;
+    }).join('');
     return `
       <div class="today-row">
-        <div>
-          <div class="grade-name">${displayGrade(g)}</div>
-          <div class="grade-sub">${sub}</div>
-        </div>
-        <input type="number" min="0" inputmode="numeric" class="today-input ${cls}" value="${qty}"
-          onchange="saveTodayProduction('${g}', this.value)">
+        <div class="grade-name" style="flex:0 0 92px;">${displayGrade(g)}</div>
+        <div class="prod-day-inputs">${dayCells}</div>
       </div>`;
   }).join('');
 
   el.innerHTML = `
-    <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">
-      ${new Date().toLocaleDateString('en-NZ', { weekday: 'long', day: 'numeric', month: 'long' })} — ${branchName(bn)}
+    <div style="font-size:12px;color:var(--muted);margin-bottom:6px;">${branchName(bn)}</div>
+    <div class="today-row" style="background:transparent;border:none;padding:0 0 4px;">
+      <div style="flex:0 0 92px;"></div>
+      <div class="prod-day-inputs">${dayHeaderCells}</div>
     </div>
     ${rows}
-    <div style="font-size:11px;color:var(--faint);margin-top:8px;text-align:center;">
-      Missed a day? Go to the Stock tab to enter past production for that grade.
+    <div style="font-size:11px;color:var(--faint);margin-top:10px;text-align:center;">
+      Need to go back further? Use the Stock tab to enter production for any past date.
     </div>`;
 }
 
-async function saveTodayProduction(grade, qty) {
+async function saveTodayProduction(grade, dateStr, qty) {
   const bn = settings.branchNo;
-  const today = todayLocal();
   const qtyInt = parseInt(qty) || 0;
 
   const existing = blockProduction.find(
-    p => Number(p.branch_no) === Number(bn) && p.grade === grade && p.production_date === today
+    p => Number(p.branch_no) === Number(bn) && p.grade === grade && p.production_date === dateStr
   );
   if (existing) await sbDelete('block_production', existing.id);
-  await sbInsert('block_production', { branch_no: Number(bn), grade, production_date: today, qty: qtyInt, notes: 'Actual production' });
+  await sbInsert('block_production', { branch_no: Number(bn), grade, production_date: dateStr, qty: qtyInt, notes: 'Actual production' });
 
   showToast('Saved');
   await loadAllData();
@@ -1013,6 +1050,14 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') init();
 });
 window.addEventListener('online', init);
+
+// Register service worker — required by Chrome/Android for full PWA install
+// behaviour (manifest icon, standalone display) instead of a plain bookmark.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(e => console.warn('SW registration failed:', e));
+  });
+}
 
 init();
 </script>
