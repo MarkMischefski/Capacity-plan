@@ -1,0 +1,3403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Machine Capacity — Expol</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  :root {
+    --bg:        #0f1117;
+    --surface:   #181c27;
+    --card:      #1e2333;
+    --border:    #2a3045;
+    --border2:   #333d58;
+    --accent:    #f97316;
+    --accent2:   #fb923c;
+    --green:     #22c55e;
+    --amber:     #f59e0b;
+    --red:       #ef4444;
+    --blue:      #3b82f6;
+    --text:      #e8ecf4;
+    --muted:     #8892a4;
+    --faint:     #4a556a;
+    --mono:      'JetBrains Mono', monospace;
+    --sans:      'Inter', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    min-height: 100vh;
+  }
+
+  /* ── Layout ── */
+  .shell { display: flex; height: 100vh; overflow: hidden; }
+
+  nav {
+    width: 220px;
+    flex-shrink: 0;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+  }
+
+  .nav-brand {
+    padding: 20px 20px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-brand .logo {
+    font-weight: 700;
+    font-size: 16px;
+    letter-spacing: -0.3px;
+    color: var(--text);
+  }
+  .nav-brand .logo span { color: var(--accent); }
+  .nav-brand .sub {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+  }
+
+  .nav-links { flex: 1; padding: 12px 0; }
+
+  .nav-link {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 20px;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 13.5px;
+    transition: color 0.15s, background 0.15s;
+    border-left: 2px solid transparent;
+  }
+  .nav-link:hover { color: var(--text); background: rgba(255,255,255,0.03); }
+  .nav-link.active {
+    color: var(--text);
+    background: rgba(249,115,22,0.08);
+    border-left-color: var(--accent);
+  }
+  .nav-link svg { width: 16px; height: 16px; flex-shrink: 0; }
+
+  .nav-meta {
+    padding: 14px 20px;
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--faint);
+  }
+
+  main {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  .page { display: none; }
+  .page.active { display: block; }
+  .page.page-dashboard-flex.active { display: flex; flex-direction: column; }
+
+  /* ── Page header ── */
+  .page-header {
+    padding: 24px 28px 0;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .page-header h1 {
+    font-size: 20px;
+    font-weight: 600;
+    letter-spacing: -0.3px;
+  }
+  .page-header .subtitle { font-size: 13px; color: var(--muted); margin-top: 3px; }
+
+  .controls {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  select, input[type=text], input[type=number] {    background: var(--card);
+    border: 1px solid var(--border2);
+    color: var(--text);
+    padding: 7px 10px;
+    border-radius: 6px;
+    font-family: var(--sans);
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  select:focus, input:focus { border-color: var(--accent); }
+
+  .btn {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 7px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s;
+    font-family: var(--sans);
+  }
+  .btn:hover { background: var(--accent2); }
+  .btn.secondary {
+    background: var(--card);
+    color: var(--muted);
+    border: 1px solid var(--border2);
+  }
+  .btn.secondary:hover { color: var(--text); border-color: var(--faint); }
+
+  /* ── Section / content area ── */
+  .content { padding: 20px 28px 32px; }
+
+  /* ── Week navigation ── */
+  .week-nav {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 14px;
+    margin-bottom: 20px;
+  }
+  .week-nav .label { font-size: 13px; color: var(--muted); margin-right: 4px; }
+  .week-nav .range { font-size: 13px; font-weight: 500; min-width: 200px; }
+  .week-btn {
+    background: var(--card);
+    border: 1px solid var(--border2);
+    color: var(--muted);
+    width: 28px; height: 28px;
+    border-radius: 5px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .week-btn:hover { color: var(--text); border-color: var(--faint); }
+  .week-nav .spacer { flex: 1; }
+  .week-nav .today-btn {
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 5px;
+    background: var(--card);
+    border: 1px solid var(--border2);
+    color: var(--muted);
+    cursor: pointer;
+    font-family: var(--sans);
+    transition: color 0.15s;
+  }
+  .week-nav .today-btn:hover { color: var(--text); }
+
+  /* ── Branch section ── */
+  .branch-section {
+    margin-bottom: 28px;
+  }
+
+  .branch-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .branch-name {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.2px;
+  }
+  .branch-tag {
+    font-size: 11px;
+    background: rgba(249,115,22,0.12);
+    color: var(--accent);
+    padding: 2px 8px;
+    border-radius: 20px;
+    font-family: var(--mono);
+    font-weight: 500;
+  }
+  .branch-summary {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .machines-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 12px;
+  }
+
+  /* ── Machine card ── */
+  .machine-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    transition: border-color 0.15s;
+  }
+  .machine-card:hover { border-color: var(--border2); }
+  .machine-card.inactive { opacity: 0.45; }
+  .machine-card.overloaded { border-color: rgba(239,68,68,0.4); }
+
+  .mc-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .mc-name {
+    font-size: 13.5px;
+    font-weight: 500;
+    line-height: 1.2;
+  }
+  .mc-id {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--faint);
+    margin-top: 3px;
+  }
+  .mc-badge {
+    font-size: 11px;
+    padding: 2px 7px;
+    border-radius: 20px;
+    font-weight: 500;
+    flex-shrink: 0;
+    margin-left: 8px;
+  }
+  .mc-badge.ok      { background: rgba(34,197,94,0.12);  color: var(--green); }
+  .mc-badge.warn    { background: rgba(245,158,11,0.12); color: var(--amber); }
+  .mc-badge.over    { background: rgba(239,68,68,0.12);  color: var(--red); }
+  .mc-badge.idle    { background: rgba(74,85,106,0.3);   color: var(--faint); }
+  .mc-badge.off     { background: rgba(74,85,106,0.2);   color: var(--faint); }
+
+  /* Progress bar */
+  .mc-bar-wrap {
+    height: 6px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-bottom: 8px;
+  }
+  .mc-bar {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.4s ease;
+  }
+  .mc-bar.ok   { background: var(--green); }
+  .mc-bar.warn { background: var(--amber); }
+  .mc-bar.over { background: var(--red); }
+  .mc-bar.idle { background: var(--faint); }
+
+  .mc-stats {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+  .mc-stats .val { font-family: var(--mono); color: var(--text); font-size: 12px; }
+
+  /* ── Summary tiles ── */
+  .tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .tile {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .tile .t-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); margin-bottom: 6px; }
+  .tile .t-val   { font-size: 24px; font-weight: 600; letter-spacing: -0.5px; font-family: var(--mono); }
+  .tile .t-sub   { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .tile.accent .t-val { color: var(--accent); }
+  .tile.green  .t-val { color: var(--green); }
+  .tile.red    .t-val { color: var(--red); }
+  .tile.amber  .t-val { color: var(--amber); }
+
+  /* ── Weekly chart ── */
+  .chart-section {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 18px;
+    margin-bottom: 20px;
+  }
+  .chart-title {
+    font-size: 13px;
+    font-weight: 500;
+    margin-bottom: 14px;
+    color: var(--muted);
+  }
+  .chart-title span { color: var(--text); }
+
+  .week-chart {
+    display: flex;
+    gap: 4px;
+    align-items: flex-end;
+    height: 80px;
+  }
+  .wc-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+  .wc-bar-wrap {
+    width: 100%;
+    flex: 1;
+    display: flex;
+    align-items: flex-end;
+    position: relative;
+  }
+  .wc-bar {
+    width: 100%;
+    border-radius: 3px 3px 0 0;
+    min-height: 2px;
+    transition: height 0.3s ease;
+    position: relative;
+  }
+  .wc-label { font-size: 10px; color: var(--faint); font-family: var(--mono); }
+  .wc-pct   { font-size: 10px; color: var(--muted); }
+
+  /* ── Upcoming table ── */
+  .upcoming-section {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 20px;
+  }
+  .upcoming-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .upcoming-header h3 { font-size: 13px; font-weight: 500; }
+
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--faint);
+    font-weight: 500;
+    padding: 8px 16px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  td {
+    padding: 9px 16px;
+    font-size: 12.5px;
+    border-bottom: 1px solid var(--border);
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+  .mono { font-family: var(--mono); font-size: 12px; }
+  .td-muted { color: var(--muted); }
+  .overdue { color: var(--red); }
+  .near    { color: var(--amber); }
+
+  /* ── Settings page ── */
+  .settings-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    max-width: 900px;
+  }
+  @media (max-width: 700px) { .settings-grid { grid-template-columns: 1fr; } }
+
+  .settings-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .settings-card-header {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .settings-card-body { padding: 16px 18px; }
+
+  .branch-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .branch-row:last-child { margin-bottom: 0; }
+  .branch-num {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--accent);
+    width: 36px;
+    flex-shrink: 0;
+    text-align: right;
+  }
+  .branch-input {
+    flex: 1;
+  }
+  .branch-active {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .data-source-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px;
+    max-width: 900px;
+    margin-bottom: 20px;
+  }
+  .ds-title { font-size: 13px; font-weight: 500; margin-bottom: 14px; }
+  .ds-row { margin-bottom: 12px; }
+  .ds-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--muted); margin-bottom: 5px; }
+  .ds-input { width: 100%; }
+
+  .info-box {
+    background: rgba(59,130,246,0.07);
+    border: 1px solid rgba(59,130,246,0.2);
+    border-radius: 6px;
+    padding: 12px 14px;
+    font-size: 12px;
+    color: #93c5fd;
+    line-height: 1.6;
+    margin-top: 14px;
+  }
+  .info-box strong { color: #bfdbfe; }
+
+  .sql-block {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px 14px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: #94a3b8;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin-top: 10px;
+  }
+
+  .save-bar {
+    position: sticky;
+    bottom: 0;
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    padding: 12px 28px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .save-msg { font-size: 12px; color: var(--green); display: none; }
+  .save-msg.show { display: block; }
+
+  .toggle {
+    width: 32px; height: 18px;
+    background: var(--border2);
+    border-radius: 9px;
+    position: relative;
+    cursor: pointer;
+    transition: background 0.2s;
+    flex-shrink: 0;
+    border: none;
+  }
+  .toggle::after {
+    content: '';
+    position: absolute;
+    width: 12px; height: 12px;
+    background: #fff;
+    border-radius: 50%;
+    top: 3px; left: 3px;
+    transition: transform 0.2s;
+  }
+  .toggle.on { background: var(--accent); }
+  .toggle.on::after { transform: translateX(14px); }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid var(--border2);
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-family: var(--mono);
+    color: var(--muted);
+  }
+  .chip.on { background: rgba(34,197,94,0.08); border-color: rgba(34,197,94,0.25); color: var(--green); }
+  .chip.off { background: rgba(239,68,68,0.07); border-color: rgba(239,68,68,0.2); color: var(--red); }
+
+  .empty { text-align: center; padding: 40px; color: var(--faint); font-size: 13px; }
+
+  .machine-list-branch {
+    margin-bottom: 16px;
+  }
+  .machine-list-branch:last-child { margin-bottom: 0; }
+  .machine-list-branch-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--faint);
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .machine-list-branch-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+  .machine-list-items {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 4px;
+  }
+  .machine-toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .machine-toggle-row:hover { background: rgba(255,255,255,0.04); }
+  .machine-toggle-row input[type=checkbox] {
+    width: 14px; height: 14px;
+    accent-color: var(--accent);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .machine-toggle-row .mt-name {
+    font-size: 12.5px;
+    flex: 1;
+  }
+  .machine-toggle-row .mt-id {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--faint);
+  }
+  .machine-toggle-row.excluded .mt-name { color: var(--faint); text-decoration: line-through; }
+  /* ── Material needs ── */
+  .mat-grade-section { margin-bottom: 28px; }
+  .mat-grade-header {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 10px; padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .mat-grade-name { font-size: 15px; font-weight: 600; }
+  .mat-grade-total { margin-left: auto; font-family: var(--mono); font-size: 13px; color: var(--accent); }
+  .mat-day-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap: 8px;
+  }
+  .mat-day-card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 7px; padding: 10px 12px; transition: border-color 0.15s;
+  }
+  .mat-day-card.today { border-color: var(--accent); }
+  .mat-day-card.zero  { opacity: 0.35; }
+  .mat-day-label { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+  .mat-day-label .dow { font-weight: 600; color: var(--text); }
+  .mat-day-vol { font-family: var(--mono); font-size: 18px; font-weight: 600; letter-spacing: -0.5px; }
+  .mat-day-unit { font-size: 10px; color: var(--faint); margin-left: 2px; }
+  .mat-day-jobs { font-size: 10px; color: var(--muted); margin-top: 3px; }
+  .mat-no-data { text-align:center; padding:40px; color:var(--faint); font-size:13px; }
+
+  /* ── Block stock ── */
+  .bs-grade-section { margin-bottom: 28px; }
+  .bs-grade-header {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 12px; padding-bottom: 10px;
+    border-bottom: 2px solid var(--border2);
+  }
+  .bs-grade-name { font-size: 16px; font-weight: 700; }
+  .bs-stock-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  .bs-stat-card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px 16px;
+  }
+  .bs-stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--muted); margin-bottom: 6px; }
+  .bs-stat-val   { font-family: var(--mono); font-size: 22px; font-weight: 700; line-height: 1; }
+  .bs-stat-sub   { font-size: 11px; color: var(--faint); margin-top: 4px; }
+
+  .bs-history-section {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 8px; overflow: hidden; margin-top: 12px;
+  }
+  .bs-history-header {
+    padding: 10px 14px; background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    font-size: 12px; font-weight: 500; color: var(--muted);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .bs-history-row {
+    display: grid;
+    grid-template-columns: 90px 80px 1fr 80px 80px;
+    gap: 8px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    align-items: center;
+  }
+  .bs-history-row:last-child { border-bottom: none; }
+  .bs-history-row:hover { background: rgba(255,255,255,0.02); }
+  .bs-type-badge {
+    font-size: 10px; padding: 2px 7px; border-radius: 20px;
+    font-weight: 500; white-space: nowrap;
+  }
+  .bs-type-opening  { background: rgba(59,130,246,0.12); color: var(--blue); }
+  .bs-type-produced { background: rgba(34,197,94,0.12);  color: var(--green); }
+  .bs-type-used     { background: rgba(239,68,68,0.12);  color: var(--red); }
+  .bs-type-adjust   { background: rgba(245,158,11,0.12); color: var(--amber); }
+
+  /* ── Modal ── */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.6); z-index: 1000;
+    align-items: center; justify-content: center;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: var(--surface); border: 1px solid var(--border2);
+    border-radius: 10px; width: 420px; max-width: 95vw;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  }
+  .modal-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 20px; border-bottom: 1px solid var(--border);
+    font-size: 14px; font-weight: 600;
+  }
+  .modal-close {
+    background: none; border: none; color: var(--faint);
+    cursor: pointer; font-size: 16px; padding: 2px 6px;
+    border-radius: 4px; line-height: 1;
+  }
+  .modal-close:hover { color: var(--text); background: rgba(255,255,255,0.06); }
+  .modal-body { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+  .modal-footer {
+    padding: 14px 20px; border-top: 1px solid var(--border);
+    display: flex; justify-content: flex-end; gap: 8px;
+  }
+  .form-row { display: flex; flex-direction: column; gap: 5px; }
+  .form-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--muted); }
+  .form-input { width: 100%; }
+
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+
+  /* Remove number input spinner arrows */
+  input[type=number]::-webkit-outer-spin-button,
+  input[type=number]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type=number] {
+    -moz-appearance: textfield;
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- Sidebar nav -->
+  <nav>
+    <div class="nav-brand">
+      <div class="logo">expol<span>.</span>ops</div>
+      <div class="sub">Production Capacity</div>
+    </div>
+    <div class="nav-links">
+      <div class="nav-link active" onclick="showPage('dashboard')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
+        Dashboard
+      </div>
+      <div class="nav-link" onclick="showPage('utilisation')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+        Machine Capacity
+      </div>
+      <div class="nav-link" onclick="showPage('jobs')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        Scheduled Jobs
+      </div>
+      <div class="nav-link" onclick="showPage('materials')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+        Block Requirements
+      </div>
+      <div class="nav-link" onclick="showPage('blockstock')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="10" y1="14" x2="14" y2="14"/></svg>
+        Block Stock
+      </div>
+      <div class="nav-link" onclick="showPage('settings')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M4.93 4.93l1.41 1.41M4.93 19.07l1.41-1.41M19.07 19.07l-1.41-1.41M21 12h-3M6 12H3M12 3V0M12 24v-3"/></svg>
+        Settings
+      </div>
+    </div>
+    <div class="nav-meta" id="data-status">
+      Using sample data<br>Connect SQL in Settings
+    </div>
+  </nav>
+
+  <main>
+
+    <!-- ══ DASHBOARD PAGE ══ -->
+    <div class="page active page-dashboard-flex" id="page-dashboard" style="height:100%;">
+      <div class="page-header" style="flex-shrink:0;">
+        <div>
+          <h1>Dashboard</h1>
+          <div class="subtitle">Block production, machine capacity, and stock alerts at a glance</div>
+        </div>
+        <div class="controls">
+          <select id="branch-filter-dash" onchange="setBranch(this.value)">
+            
+          </select>
+        </div>
+      </div>
+      <div style="flex:1;display:flex;flex-direction:column;padding:16px 28px 20px;gap:14px;min-height:0;overflow:hidden;">
+        <!-- Block production required — this week & next — always shows every
+             grade in full, never scrolls; grows to fit its content -->
+        <div style="flex:0 0 auto;display:flex;flex-direction:column;">
+          <div style="font-size:17px;font-weight:700;color:var(--text);margin-bottom:8px;flex-shrink:0;">Block Production — This Week &amp; Next</div>
+          <div id="dash-block-prod"></div>
+        </div>
+
+        <!-- Machine capacity tiles -->
+        <div style="flex:0 0 auto;display:flex;flex-direction:column;">
+          <div style="font-size:17px;font-weight:700;color:var(--text);margin-bottom:8px;flex-shrink:0;">Machine Capacity — This Week</div>
+          <div id="dash-capacity-tiles" style="display:flex;gap:12px;overflow-x:auto;padding-bottom:4px;flex-shrink:0;"></div>
+        </div>
+
+        <!-- Stock alerts (raw material app) -->
+        <div style="flex:1;display:flex;flex-direction:column;min-height:0;">
+          <div style="font-size:17px;font-weight:700;color:var(--text);margin-bottom:8px;flex-shrink:0;">Raw Material — Stock Alerts</div>
+          <div id="dash-stock-alerts" style="overflow-y:auto;flex:1;min-height:0;"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ MACHINE CAPACITY PAGE (This Week + 4-Week Forecast, stacked) ══ -->
+    <div class="page" id="page-utilisation">
+      <div class="page-header">
+        <div>
+          <h1>Machine Capacity</h1>
+          <div class="subtitle" id="week-subtitle">Loading...</div>
+        </div>
+        <div class="controls">
+          <select id="branch-filter" onchange="setBranch(this.value)">
+            
+          </select>
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);cursor:pointer;">
+            <input type="checkbox" id="show-inactive" onchange="renderUtilisation()">
+            Show inactive
+          </label>
+        </div>
+      </div>
+      <div class="content">
+        <!-- This Week section -->
+        <div style="font-size:17px;font-weight:700;color:var(--text);margin-bottom:12px;">This Week</div>
+        <div class="week-nav">
+          <span class="label">Week of</span>
+          <button class="week-btn" onclick="shiftWeek(-1)">‹</button>
+          <span class="range" id="week-range">—</span>
+          <button class="week-btn" onclick="shiftWeek(1)">›</button>
+          <div class="spacer"></div>
+          <button class="today-btn" onclick="goToday()">This week</button>
+        </div>
+        <div class="tiles" id="summary-tiles"></div>
+        <div id="branch-sections"></div>
+
+        <!-- 4-Week Forecast section -->
+        <div style="font-size:17px;font-weight:700;color:var(--text);margin:32px 0 12px;border-top:1px solid var(--border);padding-top:28px;">4-Week Forecast</div>
+        <div id="forecast-sections"></div>
+      </div>
+    </div>
+
+    <!-- ══ JOBS PAGE ══ -->
+    <div class="page" id="page-jobs">
+      <div class="page-header">
+        <div>
+          <h1>Scheduled Jobs</h1>
+          <div class="subtitle">Upcoming production schedule across all machines</div>
+        </div>
+        <div class="controls">
+          <select id="branch-filter-j" onchange="setBranch(this.value)">
+            
+          </select>
+          <select id="machine-filter-j" onchange="renderJobs()">
+            <option value="all">All Machines</option>
+          </select>
+          <select id="status-filter-j" onchange="renderJobs()">
+            <option value="active">Planned + Partial</option>
+            <option value="all">All Status</option>
+            <option value="0">Planned</option>
+            <option value="4">Partial</option>
+            <option value="1">Complete</option>
+          </select>
+        </div>
+      </div>
+      <div class="content">
+        <div class="upcoming-section">
+          <div class="upcoming-header">
+            <h3 id="jobs-count">Jobs</h3>
+            <span style="font-size:12px;color:var(--muted)">Sorted by start date</span>
+          </div>
+          <div style="overflow-x:auto;">
+            <table>
+              <thead>
+                <tr>
+                  <th>Machine</th>
+                  <th>Branch</th>
+                  <th>Start</th>
+                  <th>Due</th>
+                  <th>Hours</th>
+                  <th>Sched Qty</th>
+                  <th>Made</th>
+                  <th>Stockcode</th>
+                  <th>Description</th>
+                  <th>Grade</th>
+                  <th>SO Ord Qty</th>
+                  <th>SO Unsup Qty</th>
+                  <th>x_cubic</th>
+                  <th>m³</th>
+                  <th>line_seqno</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="jobs-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ BLOCK REQUIREMENTS PAGE ══ -->
+    <div class="page" id="page-materials">
+      <div class="page-header">
+        <div>
+          <h1>Block Requirements</h1>
+          <div class="subtitle">Blocks needed by grade — 4-week forward view from planned jobs</div>
+        </div>
+        <div class="controls">
+          <select id="branch-filter-mat" onchange="setBranch(this.value)">
+            
+          </select>
+        </div>
+      </div>
+      <div class="content">
+        <div class="tiles" id="mat-summary-tiles"></div>
+        <div id="mat-grade-sections"></div>
+      </div>
+    </div>
+
+    <!-- ══ BLOCK STOCK PAGE ══ -->
+    <div class="page" id="page-blockstock">
+      <div class="page-header">
+        <div>
+          <h1>Block Stock</h1>
+          <div class="subtitle">Current stock position by grade — opening count + production - job usage</div>
+        </div>
+        <div class="controls">
+          <select id="branch-filter-bs" onchange="setBranch(this.value)">
+            
+          </select>
+          <!-- Grade multiselect -->
+          <div style="position:relative;" id="grade-ms-wrap">
+            <button class="btn secondary" onclick="toggleGradeDropdown(event)" id="grade-ms-btn"
+                    style="min-width:130px;display:flex;align-items:center;justify-content:space-between;gap:8px;">
+              <span id="grade-ms-label">All Grades</span>
+              <span style="font-size:10px;opacity:0.6;">▼</span>
+            </button>
+            <div id="grade-ms-dropdown"
+                 style="display:none;position:absolute;top:calc(100% + 4px);right:0;min-width:180px;
+                        background:var(--card);border:1px solid var(--border2);border-radius:8px;
+                        box-shadow:0 8px 24px rgba(0,0,0,0.4);z-index:200;padding:6px 0;">
+              <div style="padding:6px 12px;border-bottom:1px solid var(--border);">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--muted);">
+                  <input type="checkbox" id="grade-ms-all" onchange="toggleAllGrades(this.checked)" checked>
+                  All grades
+                </label>
+              </div>
+              <div id="grade-ms-items" style="max-height:240px;overflow-y:auto;padding:4px 0;"></div>
+            </div>
+          </div>
+          <button class="btn" onclick="showStockEntryModal()">+ Opening Stock</button>
+          <button class="btn secondary" onclick="showProductionModal()">+ Production</button>
+          <button class="btn secondary" onclick="showAdjustmentModal()">+ Adjustment</button>
+        </div>
+      </div>
+      <div class="content">
+        <div id="bs-grade-sections"></div>
+      </div>
+    </div>
+
+    <!-- Stock Entry Modal -->
+    <div id="modal-overlay" class="modal-overlay" onmousedown="_modalMouseDownTarget=event.target">
+      <div class="modal" onclick="event.stopPropagation()" onmousedown="event.stopPropagation()">
+        <div class="modal-header">
+          <span id="modal-title">Entry</span>
+          <button class="modal-close" onclick="closeModal()">x</button>
+        </div>
+        <div class="modal-body" id="modal-body"></div>
+        <div class="modal-footer">
+          <button class="btn secondary" onclick="closeModal()">Cancel</button>
+          <button class="btn" id="modal-save" onclick="saveModal()">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ SETTINGS PAGE ══ -->
+    <div class="page" id="page-settings">
+      <div class="page-header">
+        <div>
+          <h1>Settings</h1>
+          <div class="subtitle">Branch names, data source, and display preferences</div>
+        </div>
+      </div>
+      <div class="content">
+
+        <div class="data-source-card">
+          <div class="ds-title">Data Source — Supabase</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+            <div class="ds-row">
+              <div class="ds-label">Supabase URL</div>
+              <input class="ds-input" id="supa-url" type="text" placeholder="https://xxxx.supabase.co">
+            </div>
+            <div class="ds-row">
+              <div class="ds-label">Supabase Anon Key</div>
+              <input class="ds-input" id="supa-key" type="text" placeholder="eyJ...">
+            </div>
+            <div class="ds-row">
+              <div class="ds-label">Refresh Interval</div>
+              <select id="refresh-interval" class="ds-input">
+                <option value="0">Manual only</option>
+                <option value="5">Every 5 minutes</option>
+                <option value="15" selected>Every 15 minutes</option>
+                <option value="30">Every 30 minutes</option>
+                <option value="60">Every hour</option>
+              </select>
+            </div>
+            <div class="ds-row" style="display:flex;align-items:flex-end;">
+              <button class="btn" onclick="manualRefresh()" style="width:100%;">↻ Refresh Now</button>
+            </div>
+          </div>
+          <div class="info-box">
+            <strong>Data comes from Supabase</strong> via <code>sync_machines.py</code> — run that script to pull fresh data from SQL Server.<br><br>
+            Tables: <code>capacity_machines</code> (full machine list) and <code>capacity_schedule</code> (rolling 4-week back / 12-week forward window).<br><br>
+            Use the anon key here — the sync script uses the service role key on the server side.
+          </div>
+          <div style="margin-top:16px;opacity:0.45;pointer-events:none;">
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.4px;color:var(--muted);margin-bottom:8px;">Direct SQL Server connection — available in a future version</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+              <div class="ds-row">
+                <div class="ds-label">Server / Host</div>
+                <input class="ds-input" id="sql-server" type="text" disabled placeholder="e.g. 10.0.0.5\SQLEXPRESS">
+              </div>
+              <div class="ds-row">
+                <div class="ds-label">API Endpoint</div>
+                <input class="ds-input" id="api-url" type="text" disabled placeholder="http://erp-api.expol.local/api">
+              </div>
+            </div>
+          </div>
+          <!-- hidden stub so saveSettings() refs don't break -->
+          <input type="hidden" id="sql-db">
+        </div>
+
+        <div class="settings-grid">
+          <div class="settings-card">
+            <div class="settings-card-header">Branch Names</div>
+            <div class="settings-card-body" id="branch-name-inputs"></div>
+          </div>
+          <div class="settings-card">
+            <div class="settings-card-header">Capacity Thresholds</div>
+            <div class="settings-card-body">
+              <div class="branch-row" style="flex-direction:column;align-items:flex-start;gap:6px;">
+                <div style="font-size:12px;color:var(--muted);">Warning level (%)</div>
+                <input type="number" id="thresh-warn" value="75" min="1" max="100" style="width:100%;">
+                <div style="font-size:11px;color:var(--faint);">Machines above this show amber</div>
+              </div>
+              <div class="branch-row" style="flex-direction:column;align-items:flex-start;gap:6px;margin-top:14px;">
+                <div style="font-size:12px;color:var(--muted);">Overloaded level (%)</div>
+                <input type="number" id="thresh-over" value="100" min="1" max="200" style="width:100%;">
+                <div style="font-size:11px;color:var(--faint);">Machines above this show red</div>
+              </div>
+              <div class="branch-row" style="flex-direction:column;align-items:flex-start;gap:6px;margin-top:14px;">
+                <div style="font-size:12px;color:var(--muted);">Working days per week</div>
+                <select id="work-days" style="width:100%;">
+                  <option value="5" selected>Mon–Fri (5 days)</option>
+                  <option value="6">Mon–Sat (6 days)</option>
+                  <option value="7">7 days</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-card" style="max-width:900px;margin-bottom:20px;">
+          <div class="settings-card-header" style="display:flex;align-items:center;justify-content:space-between;">
+            <span>Machine Visibility</span>
+            <span style="font-size:11px;color:var(--muted);font-weight:400;">Unchecked machines are hidden from all views and excluded from calculations</span>
+          </div>
+          <div class="settings-card-body" id="machine-visibility-list"></div>
+        </div>
+
+        <div class="settings-card" style="max-width:900px;margin-bottom:20px;">
+          <div class="settings-card-header" style="display:flex;align-items:center;justify-content:space-between;">
+            <span>Branch Material Settings</span>
+            <span style="font-size:11px;color:var(--muted);font-weight:400;">Used in Material Needs page to calculate blocks required</span>
+          </div>
+          <div class="settings-card-body">
+            <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:8px;margin-bottom:8px;">
+              <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.4px;color:var(--faint);">Branch</div>
+              <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.4px;color:var(--faint);">Block m³</div>
+              <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.4px;color:var(--faint);">% Waste</div>
+            </div>
+            <div id="branch-material-inputs"></div>
+          </div>
+        </div>
+
+        <div class="settings-card" style="max-width:900px;margin-bottom:20px;">
+          <div class="settings-card-header" style="display:flex;align-items:center;justify-content:space-between;">
+            <span>Grade Names</span>
+            <span style="font-size:11px;color:var(--muted);font-weight:400;">Rename ERP grade codes to something staff will recognise</span>
+          </div>
+          <div class="settings-card-body" id="grade-names-list">
+            <div style="color:var(--faint);font-size:13px;">Grades appear here after data loads.</div>
+          </div>
+        </div>
+
+        <div class="settings-card" style="max-width:900px;margin-bottom:20px;">
+          <div class="settings-card-header" style="display:flex;align-items:center;justify-content:space-between;">
+            <span>Grade Visibility</span>
+            <span style="font-size:11px;color:var(--muted);font-weight:400;">Only affects Material Needs page</span>
+          </div>
+          <div class="settings-card-body" id="grade-visibility-list">
+            <div style="color:var(--faint);font-size:13px;">Grades appear here after data loads.</div>
+          </div>
+        </div>
+
+      </div>
+      <div class="save-bar">
+        <button class="btn" onclick="saveSettings()">Save Settings</button>
+        <span class="save-msg" id="save-msg">✓ Settings saved</span>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+// ══════════════════════════════════════════════
+// SUPABASE CONFIG
+// ══════════════════════════════════════════════
+// Populated from Settings page and saved to localStorage.
+// Columns use lowercase names as synced by sync_machines.py.
+
+// ══════════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════════
+let settings = loadSettings();
+let currentWeekOffset = 0;
+let globalBranch = 'all';   // shared branch filter across all pages
+let machines   = [];
+let schedule   = [];
+let salesLines = [];
+let stockItems = [];
+
+function loadSettings() {
+  const defaults = {
+    branchNames: {0:"Head Office",1:"Branch 1",2:"Branch 2",3:"Branch 3",4:"Branch 4",5:"Branch 5",6:"Branch 6",7:"Branch 7"},
+    threshWarn: 75,
+    threshOver: 100,
+    workDays: 5,
+    supaUrl: '',
+    supaKey: '',
+    refreshInterval: 15,
+    excludedMachines: [],
+    branchMaterial:   {},  // branchno -> { blockM3: float, wastePct: float }
+    excludedGrades:   [],  // grades to hide in material needs page
+    gradeNames:       {},  // ERP grade code -> friendly display name
+  };
+  // supaUrl/supaKey are per-device (needed before we can reach Supabase at all),
+  // so these always come from localStorage, set once per device on first deploy.
+  let supaUrl = '', supaKey = '';
+  try {
+    const saved = JSON.parse(localStorage.getItem('expol_capacity_settings') || 'null');
+    if (saved) { supaUrl = saved.supaUrl || ''; supaKey = saved.supaKey || ''; }
+  } catch(e) {}
+  return { ...defaults, supaUrl, supaKey };
+}
+
+// Pull the shared settings (everything except supaUrl/supaKey) from Supabase so
+// every device/browser sees the same configuration without re-entering it.
+// Falls back silently to whatever loadSettings() already returned if this fails
+// (e.g. on first load before supaUrl/supaKey are set, or if offline).
+async function loadSharedSettingsFromSupabase() {
+  if (!settings.supaUrl || !settings.supaKey) return false;
+  try {
+    const res = await fetch(`${settings.supaUrl}/rest/v1/capacity_app_settings?id=eq.1&select=settings`, {
+      headers: supaHeaders()
+    });
+    if (!res.ok) return false;
+    const rows = await res.json();
+    if (!rows.length) return false;
+    const shared = rows[0].settings || {};
+    // Merge shared settings on top of current (local supaUrl/supaKey are preserved
+    // since 'shared' never contains them — see saveSettings)
+    settings = { ...settings, ...shared };
+    return true;
+  } catch (e) {
+    console.warn('Could not load shared settings from Supabase:', e);
+    return false;
+  }
+}
+
+// Push the shared settings (everything except supaUrl/supaKey) up to Supabase
+// so other devices pick up the change too.
+async function saveSharedSettingsToSupabase() {
+  if (!settings.supaUrl || !settings.supaKey) return false;
+  const { supaUrl, supaKey, ...shared } = settings; // exclude per-device fields
+  try {
+    const res = await fetch(`${settings.supaUrl}/rest/v1/capacity_app_settings?id=eq.1`, {
+      method: 'PATCH',
+      headers: { ...supaHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+      body: JSON.stringify({ settings: shared, updated_at: new Date().toISOString() })
+    });
+    return res.ok;
+  } catch (e) {
+    console.warn('Could not save shared settings to Supabase:', e);
+    return false;
+  }
+}
+
+async function saveSettings() {
+  settings.branchNames = {};
+  document.querySelectorAll('.b-name-input').forEach(el => {
+    settings.branchNames[el.dataset.branch] = el.value || `Branch ${el.dataset.branch}`;
+  });
+  settings.threshWarn       = parseInt(document.getElementById('thresh-warn').value) || 75;
+  settings.threshOver       = parseInt(document.getElementById('thresh-over').value) || 100;
+  settings.workDays         = parseInt(document.getElementById('work-days').value) || 5;
+  settings.supaUrl          = document.getElementById('supa-url').value.trim();
+  settings.supaKey          = document.getElementById('supa-key').value.trim();
+  settings.refreshInterval  = parseInt(document.getElementById('refresh-interval').value);
+
+  // Collect branch material settings
+  settings.branchMaterial = {};
+  document.querySelectorAll('.branch-block-m3').forEach(el => {
+    const b = el.dataset.branch;
+    if (!settings.branchMaterial[b]) settings.branchMaterial[b] = {};
+    settings.branchMaterial[b].blockM3 = parseFloat(el.value) || 0;
+  });
+  document.querySelectorAll('.branch-waste-pct').forEach(el => {
+    const b = el.dataset.branch;
+    if (!settings.branchMaterial[b]) settings.branchMaterial[b] = {};
+    settings.branchMaterial[b].wastePct = parseFloat(el.value) || 0;
+  });
+
+  // Collect grade name overrides
+  settings.gradeNames = {};
+  document.querySelectorAll('.grade-name-input').forEach(el => {
+    const v = el.value.trim();
+    if (v) settings.gradeNames[el.dataset.grade] = v;
+  });
+
+  // Collect excluded grades
+  settings.excludedGrades   = [];
+  settings.excludedMachines = [];
+  document.querySelectorAll('.grade-toggle').forEach(cb => {
+    if (!cb.checked) settings.excludedGrades.push(cb.dataset.grade);
+  });
+  document.querySelectorAll('.machine-toggle').forEach(cb => {
+    if (!cb.checked) settings.excludedMachines.push(parseInt(cb.dataset.seqno));
+  });
+
+  // supaUrl/supaKey stay in localStorage (per-device, needed before Supabase
+  // is reachable). Everything else is the shared/universal config pushed to
+  // Supabase so other devices pick it up automatically.
+  localStorage.setItem('expol_capacity_settings', JSON.stringify({ supaUrl: settings.supaUrl, supaKey: settings.supaKey }));
+  const pushed = await saveSharedSettingsToSupabase();
+  document.getElementById('save-msg').classList.add('show');
+  document.getElementById('save-msg').textContent = pushed
+    ? '✓ Saved — shared with all devices'
+    : '✓ Saved locally (could not reach Supabase to share)';
+  setTimeout(() => document.getElementById('save-msg').classList.remove('show'), 2500);
+  refreshBranchFilters();
+  renderMachineCapacityPage();
+}
+
+// Returns true if a machine should be shown and included in calculations
+function isMachineEnabled(m) {
+  return !(settings.excludedMachines || []).includes(Number(m.seqno));
+}
+
+// ══════════════════════════════════════════════
+// UTILITIES
+// ══════════════════════════════════════════════
+function branchName(n) { return settings.branchNames[n] || `Branch ${n}`; }
+function displayGrade(g) { return (settings.gradeNames && settings.gradeNames[g]) || g; }
+// isactive comes from Supabase as a boolean (sync_machines.py normalises it)
+function isActive(m)   { return m.isactive === true || m.isactive === 'true'; }
+
+function getWeekDates(offsetWeeks) {
+  const today = new Date();
+  const dow = today.getDay(); // 0=Sun
+  const mon = new Date(today);
+  mon.setDate(today.getDate() - (dow === 0 ? 6 : dow - 1) + offsetWeeks * 7);
+  const days = Array.from({length:7}, (_,i) => {
+    const d = new Date(mon);
+    d.setDate(mon.getDate() + i);
+    return d;
+  });
+  return days;
+}
+
+function fmtDate(d) {
+  return d.toISOString().slice(0,10);
+}
+
+// Timezone-safe: formats using local date parts so NZ+12 doesn't roll back to yesterday
+function fmtDateLocal(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function fmtShort(s) {
+  const d = new Date(s);
+  return d.toLocaleDateString('en-NZ', {day:'numeric',month:'short'});
+}
+
+function parseDate(s) { return s ? s.slice(0,10) : null; }
+
+function getColor(pct, threshWarn, threshOver) {
+  if (pct === 0) return 'idle';
+  if (pct >= threshOver) return 'over';
+  if (pct >= threshWarn) return 'warn';
+  return 'ok';
+}
+
+function getBadgeLabel(pct, active) {
+  if (!active) return {cls:'off', text:'Inactive'};
+  if (pct === 0) return {cls:'idle', text:'Idle'};
+  if (pct >= settings.threshOver) return {cls:'over', text:'Overloaded'};
+  if (pct >= settings.threshWarn) return {cls:'warn', text:'Near capacity'};
+  return {cls:'ok', text: Math.round(pct)+'%'};
+}
+
+// ══════════════════════════════════════════════
+// SCHEDULE AGGREGATION
+// ══════════════════════════════════════════════
+
+// Returns YYYY-MM-DD of today in local time
+function todayLocal() { return fmtDateLocal(new Date()); }
+
+// For the current week, capacity = remaining working days (today onwards) x daily_hours.
+// For past/future weeks, capacity = full workDays x daily_hours.
+function getCapacity(machine, workDayDates, offsetWeeks) {
+  if (offsetWeeks !== 0) return machine.daily_hours * workDayDates.length;
+  const today = todayLocal();
+  const remaining = workDayDates.filter(d => fmtDateLocal(d) >= today);
+  return machine.daily_hours * remaining.length;
+}
+
+// Remaining hours for a job:
+//   planned (0)  -> full prod_hours
+//   partial (4)  -> prod_hours x (1 - completeqty/qty), i.e. the unfulfilled portion
+function remainingHours(j) {
+  const hrs = parseFloat(j.prod_hours) || 0;
+  if (Number(j.iscomplete) === 4) {
+    const qty       = parseFloat(j.qty)         || 0;
+    const doneQty   = parseFloat(j.completeqty) || 0;
+    if (qty > 0) {
+      const remaining = Math.max(0, (qty - doneQty) / qty);
+      return hrs * remaining;
+    }
+  }
+  return hrs;
+}
+
+// Scheduled remaining hours for a machine across given dates (planned + partial, adjusted)
+function getHoursForMachineInDates(machineNo, dates) {
+  const dateSet = new Set(dates.map(d => fmtDateLocal(d)));
+  const mNo = Number(machineNo);
+  const matched = schedule.filter(j =>
+    Number(j.machineno) === mNo &&
+    dateSet.has(parseDate(j.startdate)) &&
+    (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4)
+  );
+  if (machineNo === machines[0]?.seqno && dates.length > 0) {
+    const allForMachine = schedule.filter(j => Number(j.machineno) === mNo);
+    const inDates = allForMachine.filter(j => dateSet.has(parseDate(j.startdate)));
+    const total = matched.reduce((s, j) => s + remainingHours(j), 0);
+    console.log(`[debug] machine ${mNo} | dateSet: ${[...dateSet].join(', ')} | all: ${allForMachine.length} | in range: ${inDates.length} | planned+partial: ${matched.length} | adj hrs: ${total.toFixed(2)}`);
+  }
+  return matched.reduce((sum, j) => sum + remainingHours(j), 0);
+}
+
+// Total remaining planned+partial hours for a machine across ALL future dates in schedule
+function getTotalPlannedHours(machineNo) {
+  const today = todayLocal();
+  const mNo = Number(machineNo);
+  return schedule
+    .filter(j =>
+      Number(j.machineno) === mNo &&
+      parseDate(j.startdate) >= today &&
+      (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4)
+    )
+    .reduce((sum, j) => sum + remainingHours(j), 0);
+}
+
+// Label for capacity display
+function capacityLabel(capacity, offsetWeeks) {
+  return offsetWeeks === 0 ? `${capacity}h left` : `${capacity}h/wk`;
+}
+
+// Days of work ahead = total planned hours / daily_hours, rounded to 1dp
+function daysAhead(machine) {
+  if (!machine.daily_hours || machine.daily_hours === 0) return null;
+  const totalHrs = getTotalPlannedHours(machine.seqno);
+  return (totalHrs / machine.daily_hours).toFixed(1);
+}
+
+// Colour for days-ahead badge
+function daysAheadCls(days) {
+  if (days === null) return 'var(--faint)';
+  const d = parseFloat(days);
+  if (d === 0)  return 'var(--faint)';
+  if (d <= 2)   return 'var(--green)';
+  if (d <= 5)   return 'var(--amber)';
+  return 'var(--red)';
+}
+// ══════════════════════════════════════════════
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  event.currentTarget.classList.add('active');
+  if (name === 'dashboard')    renderDashboard();
+  if (name === 'settings')     renderSettings();
+  if (name === 'utilisation')  renderMachineCapacityPage();
+  if (name === 'jobs')         renderJobs();
+  if (name === 'materials')    renderMaterials();
+  if (name === 'blockstock')   renderBlockStock();
+}
+
+// Renders both This Week and 4-Week Forecast sections on the merged Machine Capacity page
+function renderMachineCapacityPage() {
+  renderUtilisation();
+  renderForecast();
+}
+
+function shiftWeek(delta) {
+  currentWeekOffset += delta;
+  renderUtilisation();
+}
+function goToday() { currentWeekOffset = 0; renderUtilisation(); }
+
+// ══════════════════════════════════════════════
+// BRANCH FILTERS
+// ══════════════════════════════════════════════
+function getBranches() {
+  return [...new Set(machines.map(m => m.branchno))].sort((a,b) => a-b);
+}
+
+function setBranch(val) {
+  globalBranch = val;
+  ['branch-filter','branch-filter-j','branch-filter-mat','branch-filter-bs','branch-filter-dash'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el && el.value !== val) el.value = val;
+  });
+  const activePage = document.querySelector('.page.active')?.id;
+  if (activePage === 'page-utilisation') renderMachineCapacityPage();
+  if (activePage === 'page-jobs')       renderJobs();
+  if (activePage === 'page-materials')  renderMaterials();
+  if (activePage === 'page-blockstock') renderBlockStock();
+  if (activePage === 'page-dashboard')  renderDashboard();
+}
+
+function refreshBranchFilters() {
+  const branches = getBranches();
+  ['branch-filter','branch-filter-j','branch-filter-mat','branch-filter-bs','branch-filter-dash'].forEach(id => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    sel.innerHTML = branches.map(b => `<option value="${b}">${branchName(b)}</option>`).join('');
+    // If globalBranch was 'all' or invalid, default to the first real branch
+    if (globalBranch === 'all' || !branches.includes(Number(globalBranch))) {
+      globalBranch = branches[0] !== undefined ? String(branches[0]) : 'all';
+    }
+    sel.value = globalBranch;
+  });
+
+  // Machine filter for jobs
+  const msel = document.getElementById('machine-filter-j');
+  if (msel) {
+    const cur = msel.value;
+    msel.innerHTML = '<option value="all">All Machines</option>' +
+      machines.filter(m => isActive(m)).map(m =>
+        `<option value="${m.seqno}">${m.machine_name} (${branchName(m.branchno)})</option>`
+      ).join('');
+    msel.value = cur;
+  }
+}
+
+// ══════════════════════════════════════════════
+// UTILISATION PAGE
+// ══════════════════════════════════════════════
+function renderUtilisation() {
+  const days = getWeekDates(currentWeekOffset);
+  const workDays = settings.workDays;
+  const workDayDates = days.slice(0, workDays);
+
+  // Update header
+  document.getElementById('week-range').textContent =
+    `${fmtShort(days[0])} – ${fmtShort(days[workDays-1])} ${days[0].getFullYear()}`;
+  const today = todayLocal();
+  const daysRemaining = workDayDates.filter(d => fmtDateLocal(d) >= today).length;
+  document.getElementById('week-subtitle').textContent =
+    currentWeekOffset === 0 ? `Current week · ${daysRemaining} working day${daysRemaining !== 1 ? 's' : ''} remaining` :
+    currentWeekOffset < 0 ? `${Math.abs(currentWeekOffset)} week${Math.abs(currentWeekOffset)>1?'s':''} ago` :
+    `${currentWeekOffset} week${currentWeekOffset>1?'s':''} ahead`;
+
+  const branchFilter = globalBranch;
+  const showInactive = document.getElementById('show-inactive').checked;
+
+  // Filter machines
+  let filtered = machines.filter(m => m.seqno !== 10000 && isMachineEnabled(m));
+  if (branchFilter !== 'all') filtered = filtered.filter(m => m.branchno == branchFilter);
+  if (!showInactive) filtered = filtered.filter(isActive);
+
+  // Compute utilisation per machine
+  const machineData = filtered.map(m => {
+    const scheduledHrs = getHoursForMachineInDates(m.seqno, workDayDates);
+    const capacity     = getCapacity(m, workDayDates, currentWeekOffset);
+    const pct          = capacity > 0 ? (scheduledHrs / capacity) * 100 : 0;
+    return { machine: m, scheduledHrs, capacity, pct };
+  });
+
+  // Summary tiles
+  const activeMachines = machineData.filter(d => isActive(d.machine));
+  const overloaded = activeMachines.filter(d => d.pct >= settings.threshOver).length;
+  const nearCap    = activeMachines.filter(d => d.pct >= settings.threshWarn && d.pct < settings.threshOver).length;
+  const idle       = activeMachines.filter(d => d.pct === 0).length;
+  const totalSched = machineData.reduce((s, d) => s + d.scheduledHrs, 0);
+  const totalCap   = activeMachines.reduce((s, d) => s + d.capacity, 0);
+  const overallPct = totalCap > 0 ? Math.round((totalSched / totalCap) * 100) : 0;
+
+  document.getElementById('summary-tiles').innerHTML = `
+    <div class="tile accent"><div class="t-label">Overall Utilisation</div><div class="t-val">${overallPct}%</div><div class="t-sub">${totalSched.toFixed(1)} / ${totalCap} hrs ${currentWeekOffset === 0 ? 'remaining' : ''}</div></div>
+    <div class="tile red"><div class="t-label">Overloaded</div><div class="t-val">${overloaded}</div><div class="t-sub">machines ≥${settings.threshOver}%</div></div>
+    <div class="tile amber"><div class="t-label">Near Capacity</div><div class="t-val">${nearCap}</div><div class="t-sub">machines ≥${settings.threshWarn}%</div></div>
+    <div class="tile"><div class="t-label">Idle</div><div class="t-val" style="color:var(--faint)">${idle}</div><div class="t-sub">no scheduled jobs</div></div>
+    <div class="tile"><div class="t-label">Active Machines</div><div class="t-val">${activeMachines.length}</div><div class="t-sub">across all branches</div></div>
+  `;
+
+  // Group by branch
+  const branches = [...new Set(filtered.map(m => m.branchno))].sort((a,b)=>a-b);
+  const container = document.getElementById('branch-sections');
+  container.innerHTML = '';
+
+  branches.forEach(branchNo => {
+    const branchMachines = machineData.filter(d => d.machine.branchno === branchNo);
+    const bActive = branchMachines.filter(d => isActive(d.machine));
+    const bSched  = branchMachines.reduce((s,d) => s+d.scheduledHrs, 0);
+    const bCap    = bActive.reduce((s,d) => s+d.capacity, 0);
+    const bPct    = bCap > 0 ? Math.round((bSched/bCap)*100) : 0;
+
+    const sec = document.createElement('div');
+    sec.className = 'branch-section';
+    sec.innerHTML = `
+      <div class="branch-header">
+        <div class="branch-name">${branchName(branchNo)}</div>
+        <span class="branch-tag">#${branchNo}</span>
+        <div class="branch-summary">${bSched.toFixed(1)} / ${bCap} hrs &nbsp;·&nbsp; ${bPct}% utilisation</div>
+      </div>
+      <div class="machines-grid">
+        ${branchMachines.map(({machine:m, scheduledHrs, capacity, pct}) => {
+          const active = isActive(m);
+          const cls = active ? getColor(pct, settings.threshWarn, settings.threshOver) : 'idle';
+          const badge = getBadgeLabel(pct, active);
+          const barW  = Math.min(pct, 120);
+          const days  = active ? daysAhead(m) : null;
+          const dCol  = daysAheadCls(days);
+          return `
+            <div class="machine-card ${!active?'inactive':''} ${cls==='over'?'overloaded':''}">
+              <div class="mc-top">
+                <div>
+                  <div class="mc-name">${m.machine_name}</div>
+                  <div class="mc-id">#${m.seqno}</div>
+                </div>
+                <span class="mc-badge ${badge.cls}">${badge.text}</span>
+              </div>
+              <div class="mc-bar-wrap">
+                <div class="mc-bar ${cls}" style="width:${barW}%"></div>
+              </div>
+              <div class="mc-stats">
+                <span>Scheduled <span class="val">${scheduledHrs.toFixed(1)}h</span></span>
+                <span>${currentWeekOffset === 0 ? 'Remaining cap' : 'Capacity'} <span class="val">${capacityLabel(capacity, currentWeekOffset)}</span></span>
+                <span>Daily <span class="val">${m.daily_hours}h</span></span>
+              </div>
+              ${active && days !== null ? `
+              <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;">
+                <span style="font-size:11px;color:var(--muted);">Work ahead</span>
+                <span style="font-family:var(--mono);font-size:13px;font-weight:600;color:${dCol};">${parseFloat(days) === 0 ? 'None' : days + ' days'}</span>
+              </div>` : ''}
+            </div>`;
+        }).join('')}
+      </div>`;
+    container.appendChild(sec);
+  });
+
+  if (!container.innerHTML) container.innerHTML = '<div class="empty">No machines to display</div>';
+}
+
+// ══════════════════════════════════════════════
+// FORECAST PAGE (4 weeks)
+// ══════════════════════════════════════════════
+function renderForecast() {
+  const branchFilter = globalBranch;
+  const workDays = settings.workDays;
+  const WEEKS = 4;
+
+  const weeks = Array.from({length:WEEKS}, (_, i) => {
+    const days = getWeekDates(i);
+    const workDayDates = days.slice(0, workDays);
+    const label = `W${i+1} ${fmtShort(days[0])}`;
+    return { days: workDayDates, label };
+  });
+
+  let filtered = machines.filter(m => m.seqno !== 10000 && isActive(m) && isMachineEnabled(m));
+  if (branchFilter !== 'all') filtered = filtered.filter(m => m.branchno == branchFilter);
+
+  const branches = [...new Set(filtered.map(m => m.branchno))].sort((a,b)=>a-b);
+  const container = document.getElementById('forecast-sections');
+  container.innerHTML = '';
+
+  branches.forEach(branchNo => {
+    const bMachines = filtered.filter(m => m.branchno === branchNo);
+    const sec = document.createElement('div');
+    sec.className = 'branch-section';
+
+    const machineCards = bMachines.map(m => {
+      const weekData = weeks.map((wk, i) => {
+        const hrs = getHoursForMachineInDates(m.seqno, wk.days);
+        const cap = getCapacity(m, wk.days, i);   // i=0 is current week
+        const pct = cap > 0 ? (hrs/cap)*100 : 0;
+        return { hrs, cap, pct, label: wk.label };
+      });
+      const maxPct = Math.max(...weekData.map(w => w.pct), 5);
+
+      return `
+        <div class="machine-card">
+          <div class="mc-top">
+            <div>
+              <div class="mc-name">${m.machine_name}</div>
+              <div class="mc-id">#${m.seqno} · ${m.daily_hours}h/day</div>
+            </div>
+          </div>
+          <div class="chart-section" style="padding:10px 12px;margin-bottom:0;">
+            <div class="week-chart">
+              ${weekData.map(wk => {
+                const cls = getColor(wk.pct, settings.threshWarn, settings.threshOver);
+                const barH = maxPct > 0 ? Math.round((wk.pct / maxPct) * 100) : 0;
+                const colors = {ok:'var(--green)',warn:'var(--amber)',over:'var(--red)',idle:'var(--faint)'};
+                return `
+                  <div class="wc-col">
+                    <div class="wc-bar-wrap">
+                      <div class="wc-bar" style="height:${barH}%;background:${colors[cls]};width:100%;"></div>
+                    </div>
+                    <div class="wc-pct">${Math.round(wk.pct)}%</div>
+                    <div class="wc-label">${wk.label.split(' ')[0]}</div>
+                  </div>`;
+              }).join('')}
+            </div>
+          </div>
+          <div class="mc-stats" style="margin-top:8px;">
+            ${weekData.map((wk,i) => `<span style="font-size:10px;color:var(--faint)">${wk.label}<br><span style="color:var(--text);font-family:var(--mono)">${wk.hrs.toFixed(1)}h</span></span>`).join('')}
+          </div>
+        </div>`;
+    }).join('');
+
+    sec.innerHTML = `
+      <div class="branch-header">
+        <div class="branch-name">${branchName(branchNo)}</div>
+        <span class="branch-tag">#${branchNo}</span>
+      </div>
+      <div class="machines-grid">${machineCards}</div>`;
+    container.appendChild(sec);
+  });
+
+  if (!container.innerHTML) container.innerHTML = '<div class="empty">No data</div>';
+}
+
+// ══════════════════════════════════════════════
+// JOBS PAGE
+// ══════════════════════════════════════════════
+function renderJobs() {
+  const branchFilter = globalBranch;
+  const machineFilter = document.getElementById('machine-filter-j').value;
+  const statusFilter  = document.getElementById('status-filter-j').value;
+  const today = new Date(); today.setHours(0,0,0,0);
+
+  const machineMap = Object.fromEntries(machines.map(m => [m.seqno, m]));
+
+  let jobs = [...schedule].sort((a,b) => parseDate(a.startdate).localeCompare(parseDate(b.startdate)));
+
+  if (branchFilter !== 'all') {
+    jobs = jobs.filter(j => {
+      const m = machineMap[j.machineno];
+      return m && m.branchno == branchFilter;
+    });
+  }
+  if (machineFilter !== 'all') jobs = jobs.filter(j => j.machineno == machineFilter);
+  if (statusFilter === 'active') {
+    jobs = jobs.filter(j => Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4);
+  } else if (statusFilter !== 'all') {
+    jobs = jobs.filter(j => j.iscomplete == statusFilter);
+  }
+
+  const salesLineMap = Object.fromEntries(salesLines.map(l => [Number(l.solineid), l]));
+  const stockMap     = Object.fromEntries(stockItems.map(s => [s.stockcode, s]));
+
+  document.getElementById('jobs-count').textContent = `${jobs.length} Jobs`;
+
+  const statusLabel = s => {
+    const v = Number(s);
+    if (v === 0) return `<span style="color:var(--muted);font-size:11px;">Planned</span>`;
+    if (v === 4) return `<span style="color:var(--amber);font-size:11px;">⚠ Partial</span>`;
+    return `<span style="color:var(--green);font-size:11px;">✓ Complete</span>`;
+  };
+
+  document.getElementById('jobs-tbody').innerHTML = jobs.map(j => {
+    const m = machineMap[j.machineno];
+    const mName = m ? m.machine_name : `#${j.machineno}`;
+    const bName = m ? branchName(m.branchno) : '—';
+    const due = parseDate(j.duedate);
+    const dueDateObj = due ? new Date(due) : null;
+    const isJobActive = Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4;
+    const isOverdue = dueDateObj && dueDateObj < today && isJobActive;
+    const isNear    = dueDateObj && !isOverdue && (dueDateObj - today) < 3*24*60*60*1000 && isJobActive;
+
+    // Resolve stockcode and grade via sales line
+    const salesLine  = salesLineMap[Number(j.line_seqno)];
+    const stock      = salesLine ? stockMap[salesLine.stockcode] : null;
+    const stockcode  = salesLine ? salesLine.stockcode  : '—';
+    const stockdesc  = salesLine ? (salesLine.description || stock?.description || '') : '—';
+    const grade      = stock    ? (stock.x_grade || '—') : '—';
+
+    // m3 using developer's formula: x_cubic * (ord_quant - bkord_quant - sup_quant)
+    let cubic = null;
+    if (stock && parseFloat(stock.x_cubic) > 0 && salesLine) {
+      const lineQty = (parseFloat(salesLine.ord_quant) || 0)
+                    - (parseFloat(salesLine.bkord_quant) || 0)
+                    - (parseFloat(salesLine.sup_quant) || 0);
+      cubic = parseFloat(stock.x_cubic) * Math.max(0, lineQty);
+    }
+
+    return `<tr>
+      <td>${mName}</td>
+      <td class="td-muted">${bName}</td>
+      <td class="mono">${fmtShort(j.startdate)}</td>
+      <td class="mono ${isOverdue?'overdue':isNear?'near':''}">${due ? fmtShort(due) : '—'}</td>
+      <td class="mono">${(j.prod_hours||0).toFixed(2)}</td>
+      <td class="mono">${j.qty}</td>
+      <td class="mono">${
+        Number(j.iscomplete) === 4
+          ? `<span style="color:var(--amber)" title="${remainingHours(j).toFixed(2)}h remaining">${j.completeqty || 0} <span style="color:var(--faint);font-size:10px;">of ${j.qty}</span></span>`
+          : Number(j.iscomplete) === 1 ? `<span style="color:var(--green)">${j.completeqty || j.qty}</span>` : '—'
+      }</td>
+      <td class="mono" style="font-size:11px;">${stockcode}</td>
+      <td class="td-muted" style="font-size:11px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${stockdesc}">${stockdesc}</td>
+      <td class="mono" style="font-size:11px;">${displayGrade(grade)}</td>
+      <td class="mono" style="color:var(--muted)">${salesLine ? (salesLine.ord_quant ?? '—') : '—'}</td>
+      <td class="mono" style="color:var(--muted)">${salesLine ? (salesLine.unsup_quant ?? '—') : '—'}</td>
+      <td class="mono" style="color:var(--faint);font-size:11px;">${stock ? (stock.x_cubic ?? '—') : '—'}</td>
+      <td class="mono" style="color:${cubic !== null ? 'var(--accent)' : 'var(--faint)'};">${cubic !== null ? cubic.toFixed(3) : '—'}</td>
+      <td class="mono" style="color:var(--faint);font-size:10px;">${j.line_seqno ?? '—'}</td>
+      <td>${statusLabel(j.iscomplete)}</td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="16" class="empty">No jobs match filter</td></tr>`;
+}
+
+// ══════════════════════════════════════════════
+// MATERIAL NEEDS PAGE
+// ══════════════════════════════════════════════
+function renderMaterials() {
+  const branchFilter = globalBranch;
+  const today         = todayLocal();
+  const excludedGrades = new Set(settings.excludedGrades || []);
+
+  // Build 4 week windows from current week
+  const weeks = Array.from({length: 4}, (_, i) => {
+    const days = getWeekDates(i);
+    const workDays = days.slice(0, settings.workDays).map(d => fmtDateLocal(d));
+    const label = `W${i+1} ${fmtShort(days[0])} - ${fmtShort(days[settings.workDays-1])}`;
+    return { workDays, label, offset: i };
+  });
+
+  // Build lookup maps
+  const stockMap     = Object.fromEntries(stockItems.map(s => [s.stockcode, s]));
+  const salesLineMap = Object.fromEntries(salesLines.map(l => [Number(l.solineid), l]));
+  const machineMap   = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
+
+  // Filter schedule to planned/partial within 4-week window
+  const windowEnd = weeks[3].workDays[weeks[3].workDays.length - 1];
+  let filtered = schedule.filter(j =>
+    (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4) &&
+    j.startdate >= today &&
+    j.startdate <= windowEnd
+  );
+  if (branchFilter !== 'all') {
+    const machineSet = new Set(machines.filter(m => m.branchno == branchFilter).map(m => Number(m.seqno)));
+    filtered = filtered.filter(j => machineSet.has(Number(j.machineno)));
+  }
+
+  // Accumulate: weekIdx -> branchno -> grade -> cubic
+  const acc = {}; // [weekIdx][branchno][grade] = cubic
+
+  filtered.forEach(j => {
+    const dateStr  = parseDate(j.startdate);
+    const weekIdx  = weeks.findIndex(w => w.workDays.includes(dateStr));
+    if (weekIdx === -1) return;
+
+    const salesLine = salesLineMap[Number(j.line_seqno)];
+    if (!salesLine) return;
+    const stock = stockMap[salesLine.stockcode];
+    if (!stock || !parseFloat(stock.x_cubic)) return;
+
+    const grade = (stock.x_grade || '').trim();
+    if (!grade || excludedGrades.has(grade)) return;
+
+    const machine  = machineMap[Number(j.machineno)];
+    const branchno = machine ? machine.branchno : 0;
+
+    const lineQty = (parseFloat(salesLine.ord_quant)   || 0)
+                  - (parseFloat(salesLine.bkord_quant)  || 0)
+                  - (parseFloat(salesLine.sup_quant)    || 0);
+    const cubic = parseFloat(stock.x_cubic) * Math.max(0, lineQty);
+    if (cubic <= 0) return;
+
+    if (!acc[weekIdx])                acc[weekIdx]            = {};
+    if (!acc[weekIdx][branchno])      acc[weekIdx][branchno]  = {};
+    if (!acc[weekIdx][branchno][grade]) acc[weekIdx][branchno][grade] = 0;
+    acc[weekIdx][branchno][grade] += cubic;
+  });
+
+  // Collect visible grades and branches
+  const allGrades   = [...new Set(
+    Object.values(acc).flatMap(bObj =>
+      Object.values(bObj).flatMap(gObj => Object.keys(gObj))
+    )
+  )].sort();
+
+  const allBranches = branchFilter !== 'all'
+    ? [parseInt(branchFilter)]
+    : [...new Set(machines.filter(isMachineEnabled).map(m => m.branchno))].sort((a,b)=>a-b);
+
+  const container = document.getElementById('mat-grade-sections');
+
+  if (!allGrades.length) {
+    document.getElementById('mat-summary-tiles').innerHTML = '';
+    container.innerHTML = `<div class="mat-no-data">
+      ${salesLines.length === 0 ? 'Sales lines not loaded — run sync and refresh.' : 'No planned jobs with material grades in the next 4 weeks.'}
+    </div>`;
+    return;
+  }
+
+  // Summary tiles — total blocks per grade across 4 weeks
+  document.getElementById('mat-summary-tiles').innerHTML = allGrades.map(g => {
+    const totalCubic = allBranches.reduce((s, b) =>
+      s + weeks.reduce((ws, _, wi) => ws + ((acc[wi]?.[b]?.[g]) || 0), 0), 0);
+    const b0  = allBranches[0];
+    const mat = (settings.branchMaterial || {})[b0] || {};
+    const blockM3  = parseFloat(mat.blockM3)  || 0;
+    const wasteFac = 1 - ((parseFloat(mat.wastePct) || 0) / 100);
+    const totalBlocks = (blockM3 > 0 && wasteFac > 0)
+      ? Math.ceil(totalCubic / (blockM3 * wasteFac)) : null;
+    return `<div class="tile accent">
+      <div class="t-label">${g}</div>
+      <div class="t-val">${totalBlocks !== null ? totalBlocks : totalCubic.toFixed(1)}</div>
+      <div class="t-sub">${totalBlocks !== null ? 'blocks · 4 weeks' : 'm³ · set block m³ in settings'}</div>
+    </div>`;
+  }).join('');
+
+  // Build all grade cards then render in 2-column grid
+  const gradeCards = allGrades.map(grade => {
+
+    const gradeData = allBranches.map(branchno => {
+      const mat      = (settings.branchMaterial || {})[branchno] || {};
+      const blockM3  = parseFloat(mat.blockM3)  || 0;
+      const wastePct = parseFloat(mat.wastePct)  || 0;
+      const wasteFac = 1 - (wastePct / 100);
+
+      const weekData = weeks.map((wk, wi) => {
+        const cubic  = acc[wi]?.[branchno]?.[grade] || 0;
+        const blocks = (blockM3 > 0 && wasteFac > 0 && cubic > 0)
+          ? Math.ceil(cubic / (blockM3 * wasteFac)) : null;
+        return { cubic, blocks, label: wk.label };
+      });
+
+      const totalCubic  = weekData.reduce((s, w) => s + w.cubic, 0);
+      const totalBlocks = (blockM3 > 0 && wasteFac > 0 && totalCubic > 0)
+        ? Math.ceil(totalCubic / (blockM3 * wasteFac)) : null;
+
+      return { branchno, blockM3, wastePct, weekData, totalCubic, totalBlocks };
+    }).filter(d => d.totalCubic > 0);
+
+    if (!gradeData.length) return '';
+
+    const allBlockVals = gradeData.flatMap(d => d.weekData.map(w => w.blocks || 0));
+    const maxBlocks    = Math.max(...allBlockVals, 1);
+
+    const d0 = gradeData[0];
+
+    const weekCards = d0.weekData.map(({ cubic, blocks, label }) => {
+      const hasData = cubic > 0;
+      const heatPct = hasData && blocks ? Math.round((blocks / maxBlocks) * 100) : 0;
+      const heatCol = heatPct > 75 ? 'var(--red)' : heatPct > 40 ? 'var(--amber)' : 'var(--green)';
+      return `
+        <div style="flex:1;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px 12px;position:relative;overflow:hidden;${!hasData?'opacity:0.25':''}">
+          ${hasData ? `<div style="position:absolute;bottom:0;left:0;width:${heatPct}%;height:3px;background:${heatCol};"></div>` : ''}
+          <div style="font-size:10px;color:var(--muted);margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${label}</div>
+          ${blocks !== null
+            ? `<div style="font-family:var(--mono);font-size:20px;font-weight:700;line-height:1;color:${heatCol};">${blocks}</div>
+               <div style="font-size:10px;color:var(--faint);margin-top:2px;">blocks</div>`
+            : `<div style="font-family:var(--mono);font-size:16px;font-weight:600;color:var(--accent);">${cubic > 0 ? cubic.toFixed(2) : '—'}</div>
+               <div style="font-size:10px;color:var(--faint);">m³</div>`
+          }
+        </div>`;
+    }).join('');
+
+    const totalCard = `
+      <div style="flex:1;background:rgba(249,115,22,0.08);border:1px solid rgba(249,115,22,0.3);border-radius:6px;padding:10px 12px;">
+        <div style="font-size:10px;color:var(--accent);margin-bottom:6px;font-weight:600;">4-WK TOTAL</div>
+        ${d0.totalBlocks !== null
+          ? `<div style="font-family:var(--mono);font-size:20px;font-weight:700;line-height:1;color:var(--accent);">${d0.totalBlocks}</div>
+             <div style="font-size:10px;color:var(--faint);margin-top:2px;">blocks</div>`
+          : `<div style="font-family:var(--mono);font-size:16px;font-weight:600;color:var(--accent);">${d0.totalCubic.toFixed(2)}</div>
+             <div style="font-size:10px;color:var(--faint);">m³</div>`
+        }
+      </div>`;
+
+    return `
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;">
+        <div style="padding:12px 16px;background:var(--surface);border-bottom:2px solid var(--border2);display:flex;align-items:center;gap:10px;">
+          <div style="font-size:15px;font-weight:700;letter-spacing:-0.2px;">${displayGrade(grade)}</div>
+          ${d0.blockM3 > 0 ? `<span style="font-size:10px;background:rgba(255,255,255,0.06);border:1px solid var(--border2);border-radius:4px;padding:2px 7px;color:var(--faint);font-family:var(--mono);">${d0.blockM3}m³ · ${d0.wastePct}% waste</span>` : '<span style="font-size:10px;color:var(--red);">⚠ set block m³ in settings</span>'}
+        </div>
+        <div style="padding:12px 16px;">
+          <div style="display:flex;gap:6px;">
+            ${weekCards}
+            ${totalCard}
+          </div>
+        </div>
+      </div>`;
+  }).filter(s => s !== '');
+
+  container.innerHTML = gradeCards.length
+    ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">${gradeCards.join('')}</div>`
+    : `<div class="mat-no-data">No planned jobs with material grades in the next 4 weeks.</div>`;
+}
+
+// ══════════════════════════════════════════════
+// BLOCK STOCK
+// ══════════════════════════════════════════════
+// ══════════════════════════════════════════════
+// DASHBOARD
+// ══════════════════════════════════════════════
+let rmData = null; // cached raw-material app data: { branches, materials, weeks, usage, orders, orderLines, transfers }
+
+async function fetchRmTable(table, params = '') {
+  const pageSize = 1000;
+  let all = [];
+  let offset = 0;
+  try {
+    while (true) {
+      const res = await fetch(`${settings.supaUrl}/rest/v1/${table}?select=*${params}`, {
+        headers: { ...supaHeaders(), 'Range-Unit': 'items', 'Range': `${offset}-${offset+pageSize-1}` }
+      });
+      if (!res.ok) { console.warn(`rm fetch ${table} failed`, res.status); break; }
+      const page = await res.json();
+      all = all.concat(page);
+      if (page.length < pageSize) break; // last page
+      offset += pageSize;
+    }
+  } catch (e) { console.warn(`rm fetch ${table} error`, e); }
+  return all;
+}
+
+async function loadRmData() {
+  const [branchesArr, materials, weeks, usage, orders, orderLines, transfers, recon] = await Promise.all([
+    fetchRmTable('branches'),
+    fetchRmTable('materials'),
+    fetchRmTable('weeks'),
+    fetchRmTable('usage'),
+    fetchRmTable('orders'),
+    fetchRmTable('order_lines'),
+    fetchRmTable('transfers'),
+    fetchRmTable('stock_reconciliation', '&order=sync_date.desc'),
+  ]);
+  rmData = { branches: branchesArr, materials, weeks, usage, orders, orderLines, transfers, recon };
+  return rmData;
+}
+
+function getCurIdx(bw) {
+  const today = todayLocal();
+  let idx = bw.findIndex(w => w.week_ending >= today);
+  if (idx < 0) idx = bw.length - 1;
+  if (idx > 0) idx = idx - 1;
+  return idx;
+}
+
+function stockStatus(stock, forecastWeeklyUsage) {
+  if (stock == null) return null;
+  if (forecastWeeklyUsage <= 0) return stock < 0 ? 'critical' : 'ok';
+  const weeksCover = stock / forecastWeeklyUsage;
+  if (stock < 0 || weeksCover < 1) return 'critical';
+  if (weeksCover < 2) return 'low';
+  return 'ok';
+}
+
+// Build alerts for one branch — mirrors the raw material app's Stock Alerts panel
+// Faithful port of the raw material app's computeStocks() — week-by-week cascade
+// projecting opening stock, usage, arrived orders, and transfers per material.
+function computeStocks(bw, ul, bOrds, bLines, mats, bTransfers, branchId) {
+  const res = {};
+  let prev = {};
+
+  bw.forEach((w, wi) => {
+    res[w.id] = {};
+    const pWEstr = wi > 0 ? bw[wi - 1].week_ending : "2000-01-01";
+    const tWEstr = w.week_ending;
+
+    mats.forEach(m => {
+      const u = (ul[w.id] || {})[m.id] || {};
+      const opening = prev[m.id] ?? (u.opening_stock ?? 0);
+      const usageQty = u.actual_qty ?? u.forecast_qty ?? 0;
+
+      const arrived = bLines
+        .filter(l => l.material_id === m.id &&
+                     (l.eta || "").slice(0,10) > pWEstr &&
+                     (l.eta || "").slice(0,10) <= tWEstr &&
+                     bOrds.some(o => o.id === l.order_id))
+        .reduce((s, l) => s + (+l.qty || 0), 0);
+
+      const tIn = (bTransfers||[]).filter(t => t.to_branch_id === branchId &&
+                    t.to_material_id === m.id && t.week_number === w.week_number)
+                    .reduce((s,t) => s + (+t.qty||0), 0);
+      const tOut = (bTransfers||[]).filter(t => t.from_branch_id === branchId &&
+                    t.from_material_id === m.id && t.week_number === w.week_number)
+                    .reduce((s,t) => s + (+t.qty||0), 0);
+
+      const calculated = opening - usageQty + arrived + tIn - tOut;
+
+      res[w.id][m.id] = u.closing_stock != null ? u.closing_stock : calculated;
+      prev[m.id] = res[w.id][m.id];
+    });
+  });
+
+  return res;
+}
+
+function buildStockAlerts(branchId) {
+  if (!rmData) return [];
+  const { materials, weeks, usage, orders, orderLines, recon } = rmData;
+  const mats = materials.filter(m => m.branch_id === branchId);
+  const bw   = weeks.filter(w => w.branch_id === branchId).sort((a,b) => a.week_number - b.week_number);
+  console.log(`[alerts] branch=${branchId} materials=${mats.length} weeks=${bw.length}`);
+  if (mats.length === 0) {
+    console.log(`[alerts] branch=${branchId} — NO MATERIALS FOUND. Sample material branch_ids:`, [...new Set(materials.map(m=>m.branch_id))]);
+  }
+  if (mats.length) {
+    console.log(`[alerts] branch=${branchId} material names:`, mats.map(m=>`${m.name}(id=${m.id})`));
+  }
+  if (!mats.length) return [];
+
+  const curIdx = bw.length ? getCurIdx(bw) : -1;
+  const curWk  = curIdx >= 0 ? bw[curIdx] : null;
+  console.log(`[alerts] branch=${branchId} curIdx=${curIdx} curWk=`, curWk?.week_ending);
+  if (!curWk) return [];
+
+  const ul = {}; // week_id -> material_id -> usage row
+  usage.forEach(u => { if (!ul[u.week_id]) ul[u.week_id] = {}; ul[u.week_id][u.material_id] = u; });
+
+  // Deep diagnostic: show every usage row that exists for this branch's materials,
+  // across all weeks, so we can see if data lives on a different week than curWk
+  mats.forEach(m => {
+    const rowsForMat = bw
+      .map(w => ({ week: w.week_ending, weekId: w.id, isCur: w.id === (curWk?.id), row: ul[w.id]?.[m.id] }))
+      .filter(x => x.row);
+    console.log(`[alerts] branch=${branchId} material=${m.name}(id=${m.id}) usage rows:`,
+      rowsForMat.map(x => `${x.week}${x.isCur?' <CUR>':''}: opening=${x.row.opening_stock} actual=${x.row.actual_qty} forecast=${x.row.forecast_qty} closing=${x.row.closing_stock}`));
+  });
+
+  const bOrds = orders.filter(o => o.branch_id === branchId);
+  const bLines = orderLines.filter(l => bOrds.some(o => o.id === l.order_id));
+  const bTransfers = (rmData.transfers || []).filter(
+    t => t.from_branch_id === branchId || t.to_branch_id === branchId
+  );
+
+  // Run the full week-by-week cascade exactly like the raw material app does
+  const stocksByWeek = computeStocks(bw, ul, bOrds, bLines, mats, bTransfers, branchId);
+  const curStocks = stocksByWeek[curWk.id] || {};
+
+  const stockOf = (m) => curStocks[m.id] ?? null;
+  const forecastOf = (m) => {
+    const u = (ul[curWk.id] || {})[m.id];
+    return u?.forecast_qty || 0;
+  };
+
+  const allStatuses = mats.map(m => {
+    const s = stockOf(m);
+    const f = forecastOf(m);
+    return { m, s, f, st: stockStatus(s, f) };
+  });
+  console.log(`[alerts] branch=${branchId} statuses:`, allStatuses.map(a => `${a.m.name}: stock=${a.s} fcast=${a.f} status=${a.st}`));
+
+  const alerts = allStatuses.filter(a => a.st === 'critical' || a.st === 'low');
+
+  const matOrds = bOrds;
+
+  return alerts.map(a => {
+    const wks = (a.s != null && a.f > 0) ? (a.s / a.f) : null;
+
+    const matLines  = orderLines.filter(l => l.material_id === a.m.id && !l.received &&
+                       matOrds.some(o => o.id === l.order_id));
+    const lineEtas  = matLines.map(l => l.eta || matOrds.find(o=>o.id===l.order_id)?.eta).filter(Boolean);
+    const orderEtas = matOrds.filter(o => !orderLines.some(l=>l.order_id===o.id) && o.material_id===a.m.id)
+                              .map(o=>o.eta).filter(Boolean);
+    const allEtas   = [...lineEtas, ...orderEtas].sort();
+    const nextEta   = allEtas[0] || null;
+
+    let wksToOrder = null;
+    if (nextEta && curWk) {
+      const days = (new Date(nextEta) - new Date(curWk.week_ending)) / (24*60*60*1000);
+      wksToOrder = days / 7;
+    } else if (nextEta) {
+      const days = (new Date(nextEta) - new Date(todayLocal())) / (24*60*60*1000);
+      wksToOrder = days / 7;
+    }
+    const overdue = wksToOrder != null && wksToOrder <= 0;
+
+    return { material: a.m, stock: a.s, status: a.st, weeksCover: wks, nextEta, wksToOrder, overdue };
+  }).sort((a,b) => (a.status==='critical'?0:1) - (b.status==='critical'?0:1));
+}
+
+async function renderDashboard() {
+  const branchFilter = globalBranch;
+  const branches = branchFilter !== 'all'
+    ? [parseInt(branchFilter)]
+    : [...new Set(machines.filter(m => m.seqno !== 10000 && isMachineEnabled(m) && isActive(m)).map(m => Number(m.branchno)))].sort((a,b)=>a-b);
+
+  console.log('[dashboard] branches:', branches, 'machines loaded:', machines.length, 'schedule:', schedule.length);
+
+  // Ensure block stock data (entries/production/adjustments/template) is loaded
+  console.log('[dashboard] block stock state before load:', {entries: blockStockEntries.length, production: blockProduction.length, template: blockProductionTemplate.length, supaUrl: !!settings.supaUrl, supaKey: !!settings.supaKey});
+  if (!blockStockEntries.length && !blockProduction.length && !blockProductionTemplate.length) {
+    await loadBlockStockData();
+    console.log('[dashboard] block stock state after load:', {entries: blockStockEntries.length, production: blockProduction.length, template: blockProductionTemplate.length});
+  }
+
+  try { renderDashBlockProduction(branches); }
+  catch(e) { console.error('[dashboard] block production failed:', e); document.getElementById('dash-block-prod').innerHTML = `<div class="mat-no-data">Error: ${e.message}</div>`; }
+
+  try { renderDashCapacityTiles(branches); }
+  catch(e) { console.error('[dashboard] capacity tiles failed:', e); document.getElementById('dash-capacity-tiles').innerHTML = `<div class="mat-no-data">Error: ${e.message}</div>`; }
+
+  try { await renderDashStockAlerts(branchFilter); }
+  catch(e) { console.error('[dashboard] stock alerts failed:', e); document.getElementById('dash-stock-alerts').innerHTML = `<div class="mat-no-data">Error: ${e.message}</div>`; }
+}
+
+// ── Block production: this week + next week, daily, with running net total ──
+function renderDashBlockProduction(branches) {
+  const el = document.getElementById('dash-block-prod');
+  if (!el) return;
+
+  const allGrades = [...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))]
+    .filter(g => !(settings.excludedGrades||[]).includes(g)).sort();
+
+  if (!allGrades.length) {
+    el.innerHTML = '<div class="mat-no-data">No grades configured — check Settings &gt; Grade Visibility.</div>';
+    return;
+  }
+
+  const today  = todayLocal();
+  const slMap  = Object.fromEntries(salesLines.map(l => [Number(l.solineid), l]));
+  const stMap  = Object.fromEntries(stockItems.map(s => [s.stockcode, s]));
+  const mMap   = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
+  const DOW_LABELS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+
+  const weeks2 = Array.from({length:2}, (_, i) => {
+    const days     = getWeekDates(i);
+    const workDays = days.slice(0, settings.workDays).map(d => fmtDateLocal(d));
+    const label    = `${i===0?'This week':'Next week'} — ${fmtShort(days[0])}`;
+    return { workDays, label };
+  });
+
+  const cards = allGrades.flatMap(grade => branches.map(bn => {
+    const mat      = (settings.branchMaterial || {})[bn] || {};
+    const blockM3  = parseFloat(mat.blockM3)  || 0;
+    const wasteFac = 1 - ((parseFloat(mat.wastePct)||0)/100);
+    const stock    = calcBlockStock(bn, grade);
+    let runningBal = stock ? stock.current : 0;
+
+    const weekRows = weeks2.map(wk => {
+      let cubic = 0;
+      schedule.filter(j =>
+        (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4) &&
+        wk.workDays.includes(parseDate(j.startdate))
+      ).forEach(j => {
+        const m = mMap[Number(j.machineno)];
+        if (!m || Number(m.branchno) !== bn) return;
+        const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
+        const st = stMap[sl.stockcode];
+        if (!st || (st.x_grade||'').trim() !== grade || !parseFloat(st.x_cubic)) return;
+        const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
+        cubic += parseFloat(st.x_cubic) * Math.max(0, lq);
+      });
+      const dailyReqBlocks = (blockM3>0 && wasteFac>0 && cubic>0)
+        ? Math.ceil(cubic/(blockM3*wasteFac)) : 0;
+
+      // Match Block Stock's formula exactly: end-of-week balance = currentStock
+      // + this week's forecast (today onward, via getForecastForWeek) - this
+      // week's FULL required total (once, not spread/prorated across days).
+      const weekForecast = getForecastForWeek(bn, grade, wk.workDays);
+      runningBal += weekForecast - dailyReqBlocks;
+
+      const days = wk.workDays.map(d => {
+        const isPast = d < today;
+        const actual = getActualProduction(bn, grade, d);
+        const fcastQty = actual !== null ? actual.qty : getTemplateQty(bn, grade, d);
+        return { d, fcastQty, isPast };
+      });
+
+      const weekTotalReq = dailyReqBlocks;
+      const weekTotalFcast = days.reduce((s,d)=>s+d.fcastQty,0);
+      const net = weekTotalFcast - weekTotalReq;
+
+      return { label: wk.label, days, required: weekTotalReq, forecast: weekTotalFcast, net, endBalance: runningBal };
+    });
+
+    const grandTotalReq = weekRows.reduce((s,w)=>s+w.required,0);
+    if (grandTotalReq === 0 && weekRows.every(w=>w.forecast===0)) return '';
+
+    // Forecast production = big number, net stock balance shown below each day
+    const weekBlocks = weekRows.map(wk => {
+      const dayCells = wk.days.map(({d, fcastQty, isPast}) => {
+        const isToday = d === today;
+        const dow     = DOW_LABELS[(new Date(d+'T00:00:00').getDay()+6)%7];
+        return `<div style="flex:1;text-align:center;opacity:${isPast?'0.4':'1'};">
+          <div style="font-size:10px;color:${isToday?'var(--accent)':'var(--muted)'};font-weight:700;text-transform:uppercase;letter-spacing:0.3px;margin-bottom:3px;">${dow}</div>
+          <div style="font-family:var(--mono);font-size:17px;font-weight:700;color:${isToday?'var(--accent)':'var(--text)'};line-height:1;">${fcastQty}</div>
+        </div>`;
+      }).join('');
+      const balCol = wk.endBalance >= 0 ? 'var(--green)' : 'var(--red)';
+      return `
+        <div style="flex:1;">
+          <div style="font-size:9px;color:var(--muted);margin-bottom:3px;display:flex;justify-content:space-between;align-items:center;padding:0 3px;">
+            <span>${wk.label}</span>
+            <span style="font-family:var(--mono);font-weight:700;color:${balCol};font-size:13px;">${wk.endBalance>=0?'+':''}${wk.endBalance} end bal</span>
+          </div>
+          <div style="display:flex;gap:3px;">${dayCells}</div>
+        </div>`;
+    }).join('<div style="width:1px;background:var(--border);margin:0 12px;"></div>');
+
+    return `
+      <div style="display:flex;align-items:stretch;gap:14px;padding:7px 16px;background:var(--card);border:1px solid var(--border);border-radius:7px;margin-bottom:5px;">
+        <div style="min-width:120px;display:flex;flex-direction:column;justify-content:center;">
+          <span style="font-size:16px;font-weight:700;">${displayGrade(grade)}</span>
+          <span style="font-size:11px;color:var(--muted);">${branchName(bn)}</span>
+        </div>
+        <div style="display:flex;align-items:stretch;flex:1;">
+          ${weekBlocks}
+        </div>
+      </div>`;
+  })).filter(c => c !== '');
+
+  el.innerHTML = cards.join('') || '<div class="mat-no-data">No production scheduled for the next 2 weeks.</div>';
+}
+
+// ── Machine capacity tiles — this week ──
+function renderDashCapacityTiles(branches) {
+  const el = document.getElementById('dash-capacity-tiles');
+  if (!el) return;
+
+  const visibleMachines = machines.filter(m =>
+    m.seqno !== 10000 && isMachineEnabled(m) && isActive(m) && branches.includes(Number(m.branchno))
+  );
+  console.log('[dashboard] visibleMachines:', visibleMachines.length, 'of', machines.length, 'total');
+  if (!visibleMachines.length) {
+    el.innerHTML = '<div class="mat-no-data">No machines to show.</div>';
+    return;
+  }
+
+  const weekDates = getWeekDates(0).slice(0, settings.workDays);
+
+  el.innerHTML = visibleMachines.map(m => {
+    const cap = getCapacity(m, weekDates, 0);
+    const hrs = getHoursForMachineInDates(m.seqno, weekDates);
+    const pct = cap > 0 ? (hrs / cap) * 100 : 0;
+    const active = isActive(m);
+    const cls = active ? getColor(pct, settings.threshWarn, settings.threshOver) : 'idle';
+    const badge = getBadgeLabel(pct, active);
+    const barW = Math.min(pct, 120);
+    return `
+      <div class="machine-card ${!active?'inactive':''} ${cls==='over'?'overloaded':''}" style="min-width:280px;flex:0 0 280px;">
+        <div class="mc-top">
+          <div>
+            <div class="mc-name">${m.machine_name}</div>
+            <div class="mc-id">#${m.seqno} · ${branchName(m.branchno)}</div>
+          </div>
+          <span class="mc-badge ${badge.cls}">${badge.text}</span>
+        </div>
+        <div class="mc-bar-wrap">
+          <div class="mc-bar ${cls}" style="width:${barW}%"></div>
+        </div>
+        <div class="mc-stats">
+          <span>Scheduled <span class="val">${hrs.toFixed(1)}h</span></span>
+          <span>Remaining cap <span class="val">${cap.toFixed(1)}h</span></span>
+          <span>Daily <span class="val">${m.daily_hours}h</span></span>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// ── Stock alerts — raw material app logic, minus PO list ──
+async function renderDashStockAlerts(branchFilter) {
+  const el = document.getElementById('dash-stock-alerts');
+  if (!el) return;
+  el.innerHTML = '<div class="mat-no-data" style="color:var(--muted);">Loading stock alerts...</div>';
+
+  if (!rmData) await loadRmData();
+  console.log('[dashboard] rmData:', rmData ? {branches: rmData.branches.length, materials: rmData.materials.length, weeks: rmData.weeks.length, usage: rmData.usage.length} : null);
+  if (!rmData || !rmData.branches.length) {
+    el.innerHTML = '<div class="mat-no-data">Raw material data not available — check Supabase connection.</div>';
+    return;
+  }
+
+  // Map this app's integer branchno -> raw material app's text branch_id via name match
+  const matchBranchId = (branchNo) => {
+    const dispName = (branchName(branchNo) || '').toLowerCase().replace(/[^a-z]/g, '');
+    return rmData.branches.find(b => {
+      const rmName = (b.name || b.id || '').toLowerCase().replace(/[^a-z]/g, '');
+      return rmName === dispName || rmName.includes(dispName) || dispName.includes(rmName) || b.id === dispName;
+    })?.id || null;
+  };
+
+  const branchIds = branchFilter !== 'all'
+    ? [matchBranchId(parseInt(branchFilter))].filter(Boolean)
+    : rmData.branches.map(b => b.id);
+  console.log('[dashboard] rm branches available:', rmData.branches.map(b=>b.id), '| using branchIds:', branchIds);
+
+  const sections = branchIds.map(bid => {
+    const branchObj = rmData.branches.find(b => b.id === bid);
+    const alerts = buildStockAlerts(bid);
+    if (!alerts.length) return '';
+
+    const cards = alerts.map(a => {
+      const statusCol = a.status === 'critical' ? 'var(--red)' : 'var(--amber)';
+      const statusLbl = a.status === 'critical' ? 'CRITICAL' : 'LOW';
+      const coverStr  = a.stock < 0 ? 'NEGATIVE' : (a.weeksCover != null ? `${a.weeksCover.toFixed(1)} wks` : '—');
+      const stockStr  = a.stock != null ? `${Math.round(a.stock).toLocaleString()} kg` : '—';
+      let orderStr, orderCol;
+      if (!a.nextEta) {
+        orderStr = 'No order placed'; orderCol = 'var(--red)';
+      } else if (a.overdue) {
+        orderStr = `Overdue — due ${fmtShort(a.nextEta)}`; orderCol = 'var(--red)';
+      } else {
+        const slowerThanCover = a.weeksCover != null && a.wksToOrder > a.weeksCover;
+        orderStr = `Due in ${a.wksToOrder.toFixed(1)} wks (${fmtShort(a.nextEta)})`;
+        orderCol = slowerThanCover ? 'var(--amber)' : 'var(--green)';
+      }
+      return `
+        <div style="flex:1;min-width:260px;background:var(--surface);border:1px solid ${statusCol}44;border-left:4px solid ${statusCol};border-radius:8px;padding:14px 16px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+            <span style="font-size:16px;font-weight:700;">${a.material.name}</span>
+            <span style="font-size:11px;font-weight:700;letter-spacing:0.5px;color:${statusCol};background:${statusCol}22;padding:3px 10px;border-radius:5px;">${statusLbl}</span>
+          </div>
+          <div style="display:flex;gap:20px;margin-bottom:10px;">
+            <div>
+              <div style="font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:0.3px;margin-bottom:2px;">Current Stock</div>
+              <div style="font-family:var(--mono);font-size:22px;font-weight:700;color:${a.stock<0?'var(--red)':'var(--text)'};line-height:1;">${stockStr}</div>
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:0.3px;margin-bottom:2px;">Cover</div>
+              <div style="font-family:var(--mono);font-size:22px;font-weight:700;color:${statusCol};line-height:1;">${coverStr}</div>
+            </div>
+          </div>
+          <div style="font-size:13px;color:${orderCol};font-weight:600;padding-top:10px;border-top:1px solid var(--border);">${orderStr}</div>
+        </div>`;
+    }).join('');
+
+    return `
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:14px;">
+        <div style="padding:12px 18px;background:var(--surface);border-bottom:1px solid var(--border);font-size:16px;font-weight:700;">
+          ${branchObj?.name || bid}
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:12px;padding:14px;">
+          ${cards}
+        </div>
+      </div>`;
+  }).filter(s => s !== '');
+
+  el.innerHTML = sections.join('') || '<div class="mat-no-data" style="color:var(--green);font-size:16px;font-weight:600;padding:20px;">No stock alerts — all materials at healthy levels.</div>';
+}
+
+
+let blockStockEntries      = [];
+let blockProduction        = [];
+let blockAdjustments       = [];
+let blockProductionTemplate = [];
+let modalMode              = null;
+let bsSelectedGrades       = new Set(); // empty = all grades shown
+
+// ── Supabase CRUD helpers ─────────────────────
+async function bsFetch(table) {
+  const res = await fetch(
+    `${settings.supaUrl}/rest/v1/${table}?select=*&order=created_at.desc`,
+    { headers: supaHeaders() }
+  );
+  if (!res.ok) { console.error(`${table} fetch failed`, res.status); return []; }
+  return res.json();
+}
+
+async function bsFetchTemplate() {
+  const res = await fetch(
+    `${settings.supaUrl}/rest/v1/block_production_template?select=*`,
+    { headers: supaHeaders() }
+  );
+  if (!res.ok) { console.error('template fetch failed', res.status); return []; }
+  return res.json();
+}
+
+async function bsInsert(table, row) {
+  const res = await fetch(`${settings.supaUrl}/rest/v1/${table}`, {
+    method: 'POST',
+    headers: { ...supaHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+    body: JSON.stringify(row),
+  });
+  if (!res.ok) console.error(`bsInsert ${table} failed:`, res.status, await res.text());
+  return res.ok;
+}
+
+async function bsDelete(table, id) {
+  const res = await fetch(`${settings.supaUrl}/rest/v1/${table}?id=eq.${id}`, {
+    method: 'DELETE',
+    headers: { ...supaHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+  });
+  return res.ok;
+}
+
+async function loadBlockStockData() {
+  try {
+    const timeout = ms => new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms));
+    const safe = async (fn) => { try { return await Promise.race([fn(), timeout(8000)]); } catch(e) { console.warn('Block stock fetch failed/timeout:', e); return []; } };
+    [blockStockEntries, blockProduction, blockAdjustments, blockProductionTemplate] = await Promise.all([
+      safe(() => bsFetch('block_stock_entries')),
+      safe(() => bsFetch('block_production')),
+      safe(() => bsFetch('block_adjustments')),
+      safe(() => bsFetchTemplate()),
+    ]);
+    console.log(`Block stock loaded: ${blockStockEntries.length} entries, ${blockProduction.length} production, ${blockAdjustments.length} adjustments, ${blockProductionTemplate.length} template rows`);
+  } catch(e) {
+    console.error('loadBlockStockData failed:', e);
+  }
+}
+
+// ── Stock calculation ─────────────────────────
+function calcBlockStock(branchNo, grade) {
+  const bn = Number(branchNo);
+
+  // Latest opening entry for this branch+grade
+  const entries = blockStockEntries
+    .filter(e => Number(e.branch_no) === bn && e.grade === grade)
+    .sort((a, b) => b.entry_date.localeCompare(a.entry_date));
+  if (!entries.length) return null;
+
+  const base      = entries[0];
+  const baseDate  = base.entry_date;
+  const baseQty   = base.qty;
+
+  // Production since base date.
+  // For each work day from baseDate through today: use the actual entry if one
+  // exists; otherwise fall back to the weekly recurring template forecast for
+  // that day-of-week. This means stock correctly reflects forecast production
+  // even on days nobody has manually clicked into to confirm/override.
+  // Days strictly in the future are NOT included here — they're projections,
+  // not yet-happened production, and stay out of the "current stock" figure.
+  const todayStr = todayLocal();
+  let produced = 0;
+  for (let d = new Date(baseDate + 'T00:00:00'); fmtDateLocal(d) <= todayStr; d.setDate(d.getDate() + 1)) {
+    const dow = (d.getDay() + 6) % 7; // Mon=0..Sun=6
+    if (dow > 4) continue; // skip Sat/Sun — no weekday production expected
+    const dateStr = fmtDateLocal(d);
+    const actual = getActualProduction(bn, grade, dateStr);
+    if (actual !== null) {
+      produced += actual.qty;
+    } else {
+      produced += getTemplateQty(bn, grade, dateStr);
+    }
+  }
+
+  // Manual adjustments since base date
+  const adjustments = blockAdjustments
+    .filter(a => Number(a.branch_no) === bn && a.grade === grade && a.adjustment_date >= baseDate)
+    .reduce((s, a) => s + (a.qty || 0), 0);
+
+  // Completed jobs since base date — blocks used.
+  // IMPORTANT: FINISHDATE in ERP is the originally SCHEDULED finish date and
+  // never updates when a job is actually completed or partially completed.
+  // COMPLETIME is the field that reflects the real completion date, so filter
+  // on that (falling back to finishdate only if completime is missing, e.g.
+  // for rows synced before this field was added to the sync).
+  const mat        = (settings.branchMaterial || {})[bn] || {};
+  const blockM3    = parseFloat(mat.blockM3)  || 0;
+  const wasteFac   = 1 - ((parseFloat(mat.wastePct) || 0) / 100);
+  const stockMap   = Object.fromEntries(stockItems.map(s => [s.stockcode, s]));
+  const slMap      = Object.fromEntries(salesLines.map(l => [Number(l.solineid), l]));
+  const machineMap = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
+
+  let usedBlocks = 0;
+  schedule
+    .filter(j => Number(j.iscomplete) === 1 && (j.completime || j.finishdate) >= baseDate)
+    .forEach(j => {
+      const m = machineMap[Number(j.machineno)];
+      if (!m || Number(m.branchno) !== bn) return;
+      const sl    = slMap[Number(j.line_seqno)];
+      if (!sl) return;
+      const stock = stockMap[sl.stockcode];
+      if (!stock || (stock.x_grade || '').trim() !== grade) return;
+      if (!parseFloat(stock.x_cubic) || blockM3 === 0 || wasteFac <= 0) return;
+      const lineQty = (parseFloat(sl.ord_quant)   || 0)
+                    - (parseFloat(sl.bkord_quant)  || 0)
+                    - (parseFloat(sl.sup_quant)    || 0);
+      const cubic   = parseFloat(stock.x_cubic) * Math.max(0, lineQty);
+      usedBlocks   += Math.ceil(cubic / (blockM3 * wasteFac));
+    });
+
+  const current = baseQty + produced + adjustments - usedBlocks;
+  return { baseQty, baseDate, produced, adjustments, usedBlocks, current };
+}
+
+// ── Forecast helpers ──────────────────────────
+// Get template qty for a branch+grade+date (0=Mon JS getDay maps differently)
+function getTemplateQty(bn, grade, dateStr) {
+  const d   = new Date(dateStr + 'T00:00:00');
+  const dow = (d.getDay() + 6) % 7; // convert Sun=0 JS to Mon=0
+  const t   = blockProductionTemplate.find(
+    t => Number(t.branch_no) === Number(bn) && t.grade === grade && t.day_of_week === dow
+  );
+  return t ? (t.qty || 0) : 0;
+}
+
+// Get actual production entry for a date (overrides template)
+function getActualProduction(bn, grade, dateStr) {
+  const entry = blockProduction.find(
+    p => Number(p.branch_no) === Number(bn) && p.grade === grade && p.production_date === dateStr
+  );
+  return entry ? { qty: entry.qty, actual: true } : null;
+}
+
+// Get forecast production for a week (workdays only, today onwards for current week)
+// Actual production entries override the template for that specific day
+function getForecastForWeek(bn, grade, workDayDates) {
+  const today = todayLocal();
+  return workDayDates.reduce((sum, d) => {
+    // stock.current (the balance tiles' starting point) already includes today's
+    // production via calcBlockStock's own day-by-day walk (which runs through
+    // today inclusive) — so skip today here too, not just past days, or it gets
+    // double-counted once in currentStock and again in this week's forecast total.
+    if (d <= today) return sum;
+    const actual = getActualProduction(bn, grade, d);
+    const qty    = actual !== null ? actual.qty : getTemplateQty(bn, grade, d);
+    return sum + qty;
+  }, 0);
+}
+
+// Save template row (upsert via Supabase)
+async function saveTemplateRow(bn, grade, dow, qty) {
+  const res = await fetch(
+    `${settings.supaUrl}/rest/v1/block_production_template`,
+    {
+      method: 'POST',
+      headers: { ...supaHeaders(), 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify({ branch_no: Number(bn), grade, day_of_week: dow, qty: Number(qty), updated_at: new Date().toISOString() }),
+    }
+  );
+  return res.ok;
+}
+
+// ── Grade multiselect dropdown ────────────────
+function buildGradeDropdown() {
+  // Only show grades enabled in settings
+  const settingsExcluded = new Set(settings.excludedGrades || []);
+  const allGrades = [...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))]
+    .filter(g => !settingsExcluded.has(g)).sort();
+  const items = document.getElementById('grade-ms-items');
+  if (!items) return;
+  items.innerHTML = allGrades.map(g => `
+    <label style="display:flex;align-items:center;gap:8px;padding:5px 12px;cursor:pointer;font-size:12.5px;">
+      <input type="checkbox" class="grade-ms-cb" data-grade="${g}"
+             onchange="updateGradeFilter()"
+             ${bsSelectedGrades.size === 0 || bsSelectedGrades.has(g) ? 'checked' : ''}>
+      ${displayGrade(g)}
+    </label>`).join('');
+  updateGradeMsLabel();
+}
+
+function toggleGradeDropdown(e) {
+  e.stopPropagation();
+  const dd = document.getElementById('grade-ms-dropdown');
+  if (!dd) return;
+  const isOpen = dd.style.display !== 'none';
+  dd.style.display = isOpen ? 'none' : 'block';
+  if (!isOpen) buildGradeDropdown();
+}
+
+function toggleAllGrades(checked) {
+  document.querySelectorAll('.grade-ms-cb').forEach(cb => { cb.checked = checked; });
+  if (checked) {
+    bsSelectedGrades = new Set(); // empty = all shown
+  } else {
+    // Collect all grades and set them all as "selected" but with none checked = show none
+    // Use a sentinel approach: put all grades in but flip logic in render
+    const settingsExcluded = new Set(settings.excludedGrades || []);
+    const allGrades = [...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))]
+      .filter(g => !settingsExcluded.has(g));
+    bsSelectedGrades = new Set(['__none__']); // sentinel — no grades match this
+  }
+  updateGradeMsLabel();
+  renderBlockStock();
+}
+
+function updateGradeFilter() {
+  const checked = [...document.querySelectorAll('.grade-ms-cb:checked')].map(cb => cb.dataset.grade);
+  const total   = document.querySelectorAll('.grade-ms-cb').length;
+  if (checked.length === 0) {
+    bsSelectedGrades = new Set(['__none__']); // show nothing
+  } else if (checked.length === total) {
+    bsSelectedGrades = new Set(); // empty = all
+  } else {
+    bsSelectedGrades = new Set(checked);
+  }
+  const allCb = document.getElementById('grade-ms-all');
+  if (allCb) allCb.checked = bsSelectedGrades.size === 0;
+  updateGradeMsLabel();
+  renderBlockStock();
+}
+
+function updateGradeMsLabel() {
+  const lbl = document.getElementById('grade-ms-label');
+  if (!lbl) return;
+  if (bsSelectedGrades.has('__none__')) { lbl.textContent = 'None'; return; }
+  lbl.textContent = bsSelectedGrades.size === 0 ? 'All Grades'
+    : bsSelectedGrades.size === 1 ? displayGrade([...bsSelectedGrades][0])
+    : `${bsSelectedGrades.size} grades`;
+}
+
+document.addEventListener('click', e => {
+  const wrap = document.getElementById('grade-ms-wrap');
+  const dd   = document.getElementById('grade-ms-dropdown');
+  if (dd && wrap && !wrap.contains(e.target)) dd.style.display = 'none';
+});
+
+async function renderBlockStock(silent) {
+  const container = document.getElementById('bs-grade-sections');
+  if (!silent) {
+    container.innerHTML = '<div class="mat-no-data" style="color:var(--muted);">Loading block stock data...</div>';
+    await loadBlockStockData();
+  }
+  buildGradeDropdown();
+
+  const branchFilter = globalBranch;
+  const allGradesRaw = [...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))].sort();
+  const settingsExcluded = new Set(settings.excludedGrades || []);
+  const enabledGrades = allGradesRaw.filter(g => !settingsExcluded.has(g));
+  const allGrades = bsSelectedGrades.has('__none__') ? []
+    : bsSelectedGrades.size > 0 ? enabledGrades.filter(g => bsSelectedGrades.has(g))
+    : enabledGrades;
+  const allBranches  = branchFilter !== 'all'
+    ? [parseInt(branchFilter)]
+    : [...new Set(machines.filter(isMachineEnabled).map(m => m.branchno))].sort((a,b)=>a-b);
+
+  if (!allGrades.length) {
+    container.innerHTML = '<div class="mat-no-data">Load data first.</div>';
+    return;
+  }
+
+  const DOW_LABELS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  const today      = todayLocal();
+
+  // Shared lookups
+  const slMap    = Object.fromEntries(salesLines.map(l => [Number(l.solineid), l]));
+  const stMap    = Object.fromEntries(stockItems.map(s => [s.stockcode, s]));
+  const mMap     = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
+
+  // Build week date arrays once
+  const weeks4 = Array.from({length:4}, (_, i) => {
+    const days     = getWeekDates(i);
+    const workDays = days.slice(0, settings.workDays).map(d => fmtDateLocal(d));
+    const label    = `W${i+1} ${fmtShort(days[0])}`;
+    return { workDays, label, offset: i };
+  });
+  const currentWeekStart = weeks4[0].workDays[0]; // Monday of this week — editing floor
+
+  // Accumulator for the bottom totals row — sums daily production qty across
+  // every visible card (grade x branch), keyed by date
+  const dailyTotals = {};
+  weeks4.forEach(wk => wk.workDays.forEach(d => { dailyTotals[d] = 0; }));
+
+  const cards = allGrades.flatMap(grade =>
+    allBranches.map(bn => {
+      const mat      = (settings.branchMaterial || {})[bn] || {};
+      const blockM3  = parseFloat(mat.blockM3)  || 0;
+      const wasteFac = 1 - ((parseFloat(mat.wastePct)||0)/100);
+      const stock    = calcBlockStock(bn, grade);
+
+      // Per-week required + forecast
+      const weekData = weeks4.map(wk => {
+        let cubic = 0;
+        const cubicByDay = {}; // date -> cubic scheduled that day (for proportional daily split)
+        wk.workDays.forEach(d => { cubicByDay[d] = 0; });
+        schedule.filter(j =>
+          (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4) &&
+          wk.workDays.includes(parseDate(j.startdate))
+        ).forEach(j => {
+          const m = mMap[Number(j.machineno)];
+          if (!m || Number(m.branchno) !== bn) return;
+          const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
+          const st = stMap[sl.stockcode];
+          if (!st || (st.x_grade||'').trim() !== grade || !parseFloat(st.x_cubic)) return;
+          const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
+          const jobCubic = parseFloat(st.x_cubic) * Math.max(0, lq);
+          cubic += jobCubic;
+          const dStr = parseDate(j.startdate);
+          if (cubicByDay[dStr] !== undefined) cubicByDay[dStr] += jobCubic;
+        });
+        const required = (blockM3>0 && wasteFac>0 && cubic>0) ? Math.ceil(cubic/(blockM3*wasteFac)) : 0;
+        const forecast = getForecastForWeek(bn, grade, wk.workDays);
+        // Per-day template/actual for editable inputs
+        const days = wk.workDays.map(d => {
+          const actual   = getActualProduction(bn, grade, d);
+          const tmpl     = getTemplateQty(bn, grade, d);
+          const isPast   = d < currentWeekStart; // only disable days before THIS week, not before today
+          const isToday  = d === today;
+          const isFuture = d > today;
+          const qty = actual !== null ? actual.qty : tmpl;
+          // A day is "override" (forecast, not yet real) only if it's genuinely
+          // future-dated AND was explicitly set. Once today/past, it's actual.
+          const isOverride = isFuture && actual !== null;
+          // This day's share of the week's required blocks, proportional to its
+          // share of the week's cubic — NOT an even split. Distributing the
+          // single rounded week-total this way guarantees the 5 daily figures
+          // sum to exactly the same number shown on the week tile above them.
+          const dayReqShare = cubic > 0 ? required * (cubicByDay[d] / cubic) : 0;
+          dailyTotals[d] = (dailyTotals[d] || 0) + qty;
+          return { d, qty, isOverride, isPast, isToday, isFuture, dayReqShare };
+        });
+        return { ...wk, required, forecast, days };
+      });
+
+      const totalReq  = weekData.reduce((s,w) => s+w.required, 0);
+      if (!stock && totalReq === 0) return null;
+
+      const currentStock = stock ? stock.current : 0;
+      const stockCol     = currentStock <= 0 ? 'var(--red)' : currentStock < totalReq ? 'var(--amber)' : 'var(--green)';
+      const cardId = `bsc-${bn}-${grade.replace(/\s+/g,'_')}`; // kept for potential future use
+
+      // Balance tiles — week label left, big balance centre, req/fcast below
+      let runBal = currentStock;
+      const collapsedWeeks = weekData.map(wk => {
+        runBal += wk.forecast; runBal -= wk.required;
+        const col = runBal >= 0 ? 'var(--green)' : 'var(--red)';
+        return `
+          <div style="flex:1;padding:6px 10px;border-right:1px solid var(--border);display:flex;align-items:center;gap:10px;">
+            <div style="font-size:10px;color:var(--muted);min-width:48px;line-height:1.4;">${wk.label}</div>
+            <div style="flex:1;text-align:center;">
+              <div style="font-family:var(--mono);font-size:18px;font-weight:700;color:${col};line-height:1;">${runBal>=0?'+':''}${runBal}</div>
+              <div style="font-size:9px;color:var(--faint);margin-top:2px;">${wk.required} req / ${wk.forecast} fcast</div>
+            </div>
+          </div>`;
+      }).join('');
+
+      // Input row — no week label, inputs + daily balance below
+      let runExp = currentStock;
+      const expandedWeeks = weekData.map((wk, wi) => {
+        // Calc running daily balances for this week
+        let dayBal = runExp; // balance at start of this week
+        runExp += wk.forecast; runExp -= wk.required;
+
+        const dayInputs = wk.days.map(({d, qty, isOverride, isPast, isToday, isFuture}) => {
+          const dow      = DOW_LABELS[(new Date(d+'T00:00:00').getDay()+6)%7];
+          const actualEntry = !isFuture && getActualProduction(bn, grade, d) !== null;
+          // Three distinct states: future override (blue), actual entry recorded
+          // for today/past (orange/accent), or untouched template/no entry (grey)
+          const borderCol = isOverride ? 'var(--blue)' : actualEntry ? 'var(--accent)' : 'var(--border2)';
+          const subLabel = isPast ? 'past' : isToday ? 'today' : isOverride ? 'override' : 'template';
+          const subCol   = isPast ? 'transparent' : isToday ? 'var(--accent)' : isOverride ? 'var(--blue)' : 'transparent';
+          return `<div style="display:flex;flex-direction:column;align-items:center;gap:2px;opacity:${isPast?'0.35':'1'};">
+            <div style="font-size:10px;color:${isToday?'var(--accent)':'var(--muted)'};font-weight:700;text-transform:uppercase;letter-spacing:0.3px;">${dow}</div>
+            <input type="number" min="0" value="${qty}"
+              style="width:46px;text-align:center;font-family:var(--mono);font-size:12px;padding:3px 2px;
+                     border-color:${borderCol};"
+              ${isPast ? 'disabled' : ''}
+              title="${isFuture ? (isOverride?'Forecast override':'From weekly template') : (isToday?'Today — actual production':'Past actual production')}"
+              onchange="saveDayForecast(${bn},'${grade}','${d}',this.value,${isFuture})">
+            <div style="font-size:8px;color:${subCol};">${subLabel}</div>
+          </div>`;
+        }).join('');
+
+        // Daily running balance — each day: prev_balance + day_forecast - day_required_share.
+        // dayReqShare is each day's proportional slice of the week's already-rounded
+        // required total (NOT an even split), so these 5 numbers sum exactly to
+        // the same week-total balance shown on the collapsed tile above.
+        // dayFcast must use the SAME boundary as getForecastForWeek (today and
+        // earlier excluded, since currentStock already accounts for those) —
+        // NOT isPast, which only means "before this whole week" and would
+        // double-count today/earlier-this-week production otherwise.
+        const dailyBalances = wk.days.map(({d, qty, isPast, isFuture, dayReqShare}) => {
+          const dayFcast = isFuture ? qty : 0;
+          dayBal = dayBal + dayFcast - dayReqShare;
+          const col = dayBal >= 0 ? 'var(--green)' : 'var(--red)';
+          return `<div style="width:46px;text-align:center;font-family:var(--mono);font-size:9px;font-weight:600;color:${col};opacity:${isPast?'0.35':'1'};">${Math.round(dayBal)>=0?'+':''}${Math.round(dayBal)}</div>`;
+        }).join('');
+
+        return `
+          <div style="flex:1;padding:6px 8px;border-right:1px solid var(--border);">
+            <div style="display:flex;gap:3px;justify-content:space-between;">${dayInputs}</div>
+            <div style="display:flex;gap:3px;justify-content:space-between;margin-top:3px;">${dailyBalances}</div>
+          </div>`;
+      }).join('');
+
+      return `
+        <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:8px;">
+          <!-- Header: grade + stock + buttons + detail toggle -->
+          <div style="padding:7px 14px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <span style="font-size:13px;font-weight:700;">${displayGrade(grade)}</span>
+            <span style="font-size:11px;color:var(--muted);">${branchName(bn)}</span>
+            ${blockM3===0 ? '<span style="font-size:10px;color:var(--red);">set block m³ in settings</span>' : ''}
+            <span style="font-size:12px;color:${stockCol};font-family:var(--mono);font-weight:600;margin-left:auto;">${currentStock} in stock</span>
+            <button onclick="showForecastTemplateModal('${bn}','${grade}')" style="font-size:11px;background:var(--card);border:1px solid var(--border2);color:var(--accent);padding:2px 8px;border-radius:5px;cursor:pointer;font-weight:500;">Set forecast</button>
+            <button onclick="showStockEntryModal('${bn}','${grade}')" style="font-size:11px;background:var(--card);border:1px solid var(--border2);color:var(--muted);padding:2px 8px;border-radius:5px;cursor:pointer;">+ Stock</button>
+            <button onclick="showProductionModal('${bn}','${grade}')" style="font-size:11px;background:var(--card);border:1px solid var(--border2);color:var(--muted);padding:2px 8px;border-radius:5px;cursor:pointer;">+ Actual</button>
+            <button onclick="showAdjustmentModal('${bn}','${grade}')" style="font-size:11px;background:var(--card);border:1px solid var(--border2);color:var(--muted);padding:2px 8px;border-radius:5px;cursor:pointer;">+/- Adj</button>
+            <span style="font-size:10px;color:var(--faint);cursor:pointer;padding:2px 5px;" onclick="toggleBsCard('${cardId}')">detail ▼</span>
+          </div>
+          <!-- Week balance tiles -->
+          <div style="display:flex;border-bottom:1px solid var(--border);">
+            ${collapsedWeeks}
+          </div>
+          <!-- Daily inputs — matched to week tile widths using same flex layout -->
+          <div style="padding:6px 0;display:flex;">
+            ${expandedWeeks}
+          </div>
+          <div style="padding:0 12px 4px;font-size:9px;color:var(--faint);">
+            Blue = forecast override &nbsp;·&nbsp; Orange = actual &nbsp;·&nbsp; White = template
+          </div>
+          <!-- Expanded: detail grid + stock breakdown -->
+          <div id="${cardId}" style="display:none;border-top:1px solid var(--border);">
+            <!-- Per-week detail — same flex layout to align with tiles above -->
+            <div style="display:flex;border-bottom:1px solid var(--border);">
+              ${weekData.map((wk, wi) => {
+                let bal = currentStock;
+                for (let i=0; i<=wi; i++) { bal += weekData[i].forecast; bal -= weekData[i].required; }
+                const net    = wk.forecast - wk.required;
+                const balCol = bal >= 0 ? 'var(--green)' : 'var(--red)';
+                const netCol = net >= 0 ? 'var(--green)' : 'var(--red)';
+                return `<div style="flex:1;padding:8px 10px;border-right:1px solid var(--border);">
+                  <div style="font-size:10px;color:var(--muted);font-weight:600;margin-bottom:4px;">${wk.label}</div>
+                  <div style="display:grid;grid-template-columns:1fr auto;gap:2px 8px;font-size:11px;">
+                    <span style="color:var(--faint);">Required</span><span style="font-family:var(--mono);font-weight:600;color:var(--red);text-align:right;">${wk.required}</span>
+                    <span style="color:var(--faint);">Forecast</span><span style="font-family:var(--mono);font-weight:600;color:var(--green);text-align:right;">${wk.forecast}</span>
+                    <span style="color:var(--faint);">Net</span><span style="font-family:var(--mono);font-weight:600;color:${netCol};text-align:right;">${net>=0?'+':''}${net}</span>
+                    <span style="color:var(--faint);font-weight:600;">Balance</span><span style="font-family:var(--mono);font-size:12px;font-weight:700;color:${balCol};text-align:right;">${bal>=0?'+':''}${bal}</span>
+                  </div>
+                </div>`;
+              }).join('')}
+            </div>
+            <!-- Stock breakdown -->
+            <div style="padding:7px 14px;font-size:11px;color:var(--muted);">
+              ${stock ? `Base ${fmtShort(stock.baseDate)}: <span style="font-family:var(--mono);color:var(--text);">${stock.baseQty}</span>
+                &nbsp;+&nbsp;<span style="color:var(--green);">+${stock.produced}</span>
+                &nbsp;-&nbsp;<span style="color:var(--red);">${stock.usedBlocks}</span>
+                &nbsp;adj&nbsp;<span style="color:var(--amber);">${stock.adjustments>=0?'+':''}${stock.adjustments}</span>
+                &nbsp;=&nbsp;<span style="font-family:var(--mono);color:${stockCol};font-weight:700;">${currentStock}</span>`
+              : 'No opening stock entry yet — click + Stock to add one.'}
+            </div>
+            <!-- Activity log -->
+            <div class="bs-history-section" style="border-radius:0;border-left:none;border-right:none;border-bottom:none;border-top:1px solid var(--border);">
+              <div class="bs-history-header"><span>Activity Log</span><span style="font-size:11px;">Last 20 entries</span></div>
+              <div style="display:grid;grid-template-columns:90px 80px 1fr 80px 80px;gap:8px;padding:6px 14px;border-bottom:1px solid var(--border);background:rgba(0,0,0,0.2);">
+                <span style="font-size:10px;color:var(--faint);text-transform:uppercase;">Date</span>
+                <span style="font-size:10px;color:var(--faint);text-transform:uppercase;">Type</span>
+                <span style="font-size:10px;color:var(--faint);text-transform:uppercase;">Note</span>
+                <span style="font-size:10px;color:var(--faint);text-transform:uppercase;text-align:right;">Qty</span>
+                <span></span>
+              </div>
+              ${(() => {
+                const history = [
+                  ...blockStockEntries.filter(e=>Number(e.branch_no)===bn&&e.grade===grade)
+                    .map(e=>({date:e.entry_date,type:'opening',qty:e.qty,note:e.notes||'Opening count',id:e.id,table:'block_stock_entries'})),
+                  ...blockProduction.filter(p=>Number(p.branch_no)===bn&&p.grade===grade&&
+                      !(p.notes==='Forecast override' && p.production_date>todayLocal()))
+                    .map(p=>({date:p.production_date,type:'produced',qty:p.qty,note:p.notes||'Production',id:p.id,table:'block_production'})),
+                  ...blockAdjustments.filter(a=>Number(a.branch_no)===bn&&a.grade===grade)
+                    .map(a=>({date:a.adjustment_date,type:'adjust',qty:a.qty,note:a.reason||'Adjustment',id:a.id,table:'block_adjustments'})),
+                  ...schedule.filter(j=>Number(j.iscomplete)===1&&stock&&(j.completime||j.finishdate)>=stock.baseDate).flatMap(j=>{
+                    const m=mMap[Number(j.machineno)];
+                    if(!m||Number(m.branchno)!==bn) return [];
+                    const sl=slMap[Number(j.line_seqno)]; if(!sl) return [];
+                    const st=stMap[sl.stockcode];
+                    if(!st||(st.x_grade||'').trim()!==grade||!parseFloat(st.x_cubic)||blockM3===0||wasteFac<=0) return [];
+                    const lq=(parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
+                    const bl=Math.ceil(parseFloat(st.x_cubic)*Math.max(0,lq)/(blockM3*wasteFac));
+                    return bl>0?[{date:j.completime||j.finishdate,type:'used',qty:-bl,note:`Job #${j.seqno} — ${sl.stockcode}`,id:null,table:null}]:[];
+                  }),
+                ].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,20);
+
+                const typeMap={opening:'Opening',produced:'Produced',used:'Used (job)',adjust:'Adjustment'};
+                const clsMap ={opening:'bs-type-opening',produced:'bs-type-produced',used:'bs-type-used',adjust:'bs-type-adjust'};
+
+                return history.map(h=>`
+                  <div class="bs-history-row">
+                    <span class="mono" style="font-size:11px;">${fmtShort(h.date)}</span>
+                    <span class="bs-type-badge ${clsMap[h.type]}">${typeMap[h.type]}</span>
+                    <span class="td-muted" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${h.note}">${h.note}</span>
+                    <span class="mono" style="text-align:right;color:${h.qty>=0?'var(--green)':'var(--red)'};">${h.qty>=0?'+':''}${h.qty}</span>
+                    <span style="text-align:right;">${h.id?`<button onclick="deleteBlockEntry('${h.table}','${h.id}','${bn}','${grade}')" style="background:none;border:none;color:var(--faint);cursor:pointer;font-size:11px;padding:2px 5px;border-radius:3px;">x</button>`:''}</span>
+                  </div>`).join('') || '<div style="padding:12px 14px;font-size:12px;color:var(--faint);">No entries yet</div>';
+              })()}
+            </div>
+          </div>
+        </div>`;
+    })
+  ).filter(c => c !== null);
+
+  // Totals row — sums daily production qty across every visible card, aligned
+  // to the same week/day column layout used by each card's input row
+  const totalsRow = `
+    <div style="background:var(--card);border:1px solid var(--border2);border-radius:8px;overflow:hidden;margin-bottom:14px;">
+      <div style="padding:7px 14px;background:var(--surface);border-bottom:1px solid var(--border);font-size:13px;font-weight:700;">
+        Total Daily Production — all visible grades/branches
+      </div>
+      <div style="display:flex;">
+        ${weeks4.map(wk => {
+          const dayCells = wk.workDays.map(d => {
+            const isToday = d === today;
+            const total = dailyTotals[d] || 0;
+            return `<div style="flex:1;text-align:center;">
+              <div style="font-family:var(--mono);font-size:14px;font-weight:700;color:${isToday?'var(--accent)':'var(--text)'};">${total}</div>
+            </div>`;
+          }).join('');
+          const weekTotal = wk.workDays.reduce((s,d) => s + (dailyTotals[d]||0), 0);
+          return `
+            <div style="flex:1;padding:8px 8px;border-right:1px solid var(--border);">
+              <div style="font-size:9px;color:var(--muted);margin-bottom:4px;display:flex;justify-content:space-between;">
+                <span>${wk.label}</span>
+                <span style="font-family:var(--mono);font-weight:700;color:var(--text);">${weekTotal}</span>
+              </div>
+              <div style="display:flex;gap:3px;">${dayCells}</div>
+            </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+
+  container.innerHTML = (cards.length ? totalsRow : '') + (cards.join('') || '<div class="mat-no-data">No block stock data. Select a branch and add an opening stock entry.</div>');
+}
+
+function toggleBsCard(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+// Save a day's value:
+//   future days  → saved as block_production with notes='Forecast override' (not actual)
+//   today / past → saved as block_production with notes='Actual production'
+async function saveDayForecast(bn, grade, dateStr, qty, isFuture) {
+  const qtyInt  = parseInt(qty) || 0;
+  const noteStr = isFuture ? 'Forecast override' : 'Actual production';
+
+  // Remove any existing entry for this day
+  const existing = blockProduction.find(
+    p => Number(p.branch_no)===Number(bn) && p.grade===grade && p.production_date===dateStr
+  );
+  if (existing) await bsDelete('block_production', existing.id);
+
+  // Only insert if qty > 0 (or it's today/past and 0 means record it)
+  if (qtyInt >= 0 && (!isFuture || qtyInt > 0)) {
+    await bsInsert('block_production', {
+      branch_no: Number(bn), grade, production_date: dateStr, qty: qtyInt, notes: noteStr
+    });
+  }
+  await loadBlockStockData();
+  renderBlockStockPreserveState();
+}
+
+// "Set up forecast" modal — set recurring weekly template
+function showForecastTemplateModal(bn, grade) {
+  _modalData = { mode:'forecast_template', bn, grade };
+  document.getElementById('modal-title').textContent = `Weekly Forecast Template — ${grade}`;
+  const DOW = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  const inputs = Array.from({length: settings.workDays}, (_, i) => {
+    const t   = blockProductionTemplate.find(t => Number(t.branch_no)===Number(bn) && t.grade===grade && t.day_of_week===i);
+    const val = t ? t.qty : 0;
+    return `<div class="form-row">
+      <div class="form-label">${DOW[i]}</div>
+      <input class="form-input" id="tpl-dow-${i}" type="number" min="0" value="${val}" placeholder="0">
+    </div>`;
+  }).join('');
+  document.getElementById('modal-body').innerHTML = `
+    ${inputs}
+    <div style="font-size:11px;color:var(--faint);">This template repeats every week. Individual days can still be overridden by entering actual production on the week card.</div>`;
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
+
+// ── Modal helpers ─────────────────────────────
+let _modalData = {};
+
+function showStockEntryModal(bn, grade) {
+  _modalData = { mode:'opening', bn, grade };
+  document.getElementById('modal-title').textContent = 'Opening Stock Entry';
+  document.getElementById('modal-body').innerHTML = `
+    <div class="form-row"><div class="form-label">Branch</div>
+      <select class="form-input" id="mf-branch">${_branchOptions(bn)}</select></div>
+    <div class="form-row"><div class="form-label">Grade</div>
+      <select class="form-input" id="mf-grade">${_gradeOptions(grade)}</select></div>
+    <div class="form-row"><div class="form-label">Date</div>
+      <input class="form-input" id="mf-date" type="date" value="${todayLocal()}"></div>
+    <div class="form-row"><div class="form-label">Blocks on Hand</div>
+      <input class="form-input" id="mf-qty" type="number" min="0" placeholder="0"></div>
+    <div class="form-row"><div class="form-label">Notes (optional)</div>
+      <input class="form-input" id="mf-notes" type="text" placeholder="e.g. Weekly stocktake"></div>
+    <div style="font-size:11px;color:var(--amber);background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:5px;padding:8px 10px;">
+      If date is today or earlier, this acts as a <strong>stocktake reset</strong> — all production and adjustment entries from that date onwards will be cleared, and this count becomes the new base.
+    </div>`;
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
+function showProductionModal(bn, grade) {
+  _modalData = { mode:'production', bn, grade };
+  document.getElementById('modal-title').textContent = 'Block Production Entry';
+  document.getElementById('modal-body').innerHTML = `
+    <div class="form-row"><div class="form-label">Branch</div>
+      <select class="form-input" id="mf-branch">${_branchOptions(bn)}</select></div>
+    <div class="form-row"><div class="form-label">Grade</div>
+      <select class="form-input" id="mf-grade">${_gradeOptions(grade)}</select></div>
+    <div class="form-row"><div class="form-label">Date</div>
+      <input class="form-input" id="mf-date" type="date" value="${todayLocal()}"></div>
+    <div class="form-row"><div class="form-label">Blocks Produced</div>
+      <input class="form-input" id="mf-qty" type="number" min="0" placeholder="0"></div>
+    <div class="form-row"><div class="form-label">Notes (optional)</div>
+      <input class="form-input" id="mf-notes" type="text" placeholder="e.g. Shift 1 run"></div>`;
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
+function showAdjustmentModal(bn, grade) {
+  _modalData = { mode:'adjustment', bn, grade };
+  document.getElementById('modal-title').textContent = 'Stock Adjustment';
+  document.getElementById('modal-body').innerHTML = `
+    <div class="form-row"><div class="form-label">Branch</div>
+      <select class="form-input" id="mf-branch">${_branchOptions(bn)}</select></div>
+    <div class="form-row"><div class="form-label">Grade</div>
+      <select class="form-input" id="mf-grade">${_gradeOptions(grade)}</select></div>
+    <div class="form-row"><div class="form-label">Date</div>
+      <input class="form-input" id="mf-date" type="date" value="${todayLocal()}"></div>
+    <div class="form-row"><div class="form-label">Quantity (+ to add, - to remove)</div>
+      <input class="form-input" id="mf-qty" type="number" placeholder="-50 or +100"></div>
+    <div class="form-row"><div class="form-label">Reason</div>
+      <input class="form-input" id="mf-notes" type="text" placeholder="e.g. Damaged blocks written off"></div>`;
+  document.getElementById('modal-overlay').classList.add('open');
+}
+
+function closeModal(e) {
+  document.getElementById('modal-overlay').classList.remove('open');
+}
+
+let _modalMouseDownTarget = null;
+// Only close if mousedown AND mouseup both happened on the overlay itself
+// (prevents closing when user drags text-select from inside the modal out past its edge)
+document.getElementById('modal-overlay')?.addEventListener('mouseup', (e) => {
+  if (e.target === e.currentTarget && _modalMouseDownTarget === e.currentTarget) {
+    closeModal();
+  }
+});
+
+async function saveModal() {
+  const btn = document.getElementById('modal-save');
+  btn.textContent = 'Saving...'; btn.disabled = true;
+
+  // forecast_template handles its own fields — no mf-* inputs
+  if (_modalData.mode === 'forecast_template') {
+    const saves = Array.from({length: settings.workDays}, (_, i) => {
+      const v = parseInt(document.getElementById(`tpl-dow-${i}`)?.value) || 0;
+      return saveTemplateRow(_modalData.bn, _modalData.grade, i, v);
+    });
+    const results = await Promise.all(saves);
+    btn.textContent = 'Save'; btn.disabled = false;
+    if (results.every(r => r)) {
+      closeModal();
+      await loadBlockStockData();
+      renderBlockStock();
+    } else {
+      alert('Some saves failed — check Supabase connection.');
+    }
+    return;
+  }
+
+  const bn    = parseInt(document.getElementById('mf-branch').value);
+  const grade = document.getElementById('mf-grade').value;
+  const dt    = document.getElementById('mf-date').value;
+  const qty   = parseInt(document.getElementById('mf-qty').value);
+  const notes = document.getElementById('mf-notes')?.value.trim() || '';
+
+  if (!dt || isNaN(qty)) { btn.textContent = 'Save'; btn.disabled = false; alert('Please fill in date and quantity.'); return; }
+
+  let ok = false;
+  if (_modalData.mode === 'opening') {
+    // Calculate variance BEFORE the reset wipes the entries we need to compute it from:
+    // variance = (current calculated stock just before this stocktake) - (new counted qty)
+    let varianceNote = '';
+    if (dt <= todayLocal()) {
+      const priorStock = calcBlockStock(bn, grade);
+      if (priorStock) {
+        const variance = priorStock.current - qty;
+        if (variance !== 0) {
+          varianceNote = ` (variance ${variance > 0 ? '+' : ''}${variance} vs system: was ${priorStock.current})`;
+        }
+      }
+    }
+    const fullNotes = (notes || 'Opening count') + varianceNote;
+
+    ok = await bsInsert('block_stock_entries', { branch_no:bn, grade, entry_date:dt, qty, notes: fullNotes });
+    // Stocktake reset: the new count becomes the base AS OF the stocktake date.
+    // Only clear entries UP TO AND INCLUDING that date (they're now superseded by
+    // the physical count) — entries AFTER the stocktake date (e.g. production that
+    // happened Wed/Thu when the count was taken Tue) must be kept, since they
+    // represent real activity since the count and should still apply on top of it.
+    if (ok && dt <= todayLocal()) {
+      const prodToDelete = blockProduction.filter(p => Number(p.branch_no)===bn && p.grade===grade && p.production_date<=dt);
+      const adjToDelete  = blockAdjustments.filter(a => Number(a.branch_no)===bn && a.grade===grade && a.adjustment_date<=dt);
+      await Promise.all([
+        ...prodToDelete.map(r => bsDelete('block_production', r.id)),
+        ...adjToDelete.map(r  => bsDelete('block_adjustments', r.id)),
+      ]);
+      // Remove older opening entries — new one is now the sole base
+      const oldEntries = blockStockEntries.filter(
+        e => Number(e.branch_no)===bn && e.grade===grade && e.entry_date < dt
+      );
+      await Promise.all(oldEntries.map(e => bsDelete('block_stock_entries', e.id)));
+    }
+  } else if (_modalData.mode === 'production') {
+    ok = await bsInsert('block_production', { branch_no:bn, grade, production_date:dt, qty, notes });
+  } else if (_modalData.mode === 'adjustment') {
+    ok = await bsInsert('block_adjustments', { branch_no:bn, grade, adjustment_date:dt, qty, reason:notes });
+  }
+
+  btn.textContent = 'Save'; btn.disabled = false;
+  if (ok) {
+    closeModal();
+    await loadBlockStockData();
+    renderBlockStock();
+  } else {
+    alert('Save failed — check Supabase connection.');
+  }
+}
+
+async function deleteBlockEntry(table, id, bn, grade) {
+  const ok = await bsDelete(table, id);
+  if (ok) {
+    await loadBlockStockData();
+    renderBlockStockPreserveState();
+  }
+}
+
+// Re-render while preserving which cards are expanded and current scroll position
+function renderBlockStockPreserveState() {
+  const container = document.getElementById('bs-grade-sections');
+  const scrollY = window.scrollY;
+  const expandedIds = container
+    ? [...container.querySelectorAll('[id^="bsc-"]')].filter(el => el.style.display === 'block').map(el => el.id)
+    : [];
+
+  renderBlockStock(true).then(() => {
+    expandedIds.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = 'block';
+    });
+    window.scrollTo(0, scrollY);
+  });
+}
+
+function _branchOptions(selected) {
+  const branches = getBranches();
+  return branches.map(b =>
+    `<option value="${b}" ${Number(selected)==b?'selected':''}>${branchName(b)} (#${b})</option>`
+  ).join('');
+}
+
+function _gradeOptions(selected) {
+  const grades = [...new Set(stockItems.map(s=>(s.x_grade||'').trim()).filter(Boolean))].sort();
+  return grades.map(g =>
+    `<option value="${g}" ${selected===g?'selected':''}>${g}</option>`
+  ).join('');
+}
+
+// ══════════════════════════════════════════════
+// SETTINGS PAGE
+// ══════════════════════════════════════════════
+function renderSettings() {
+  const branches = getBranches();
+
+  // Branch names
+  document.getElementById('branch-name-inputs').innerHTML = branches.map(b => `
+    <div class="branch-row">
+      <span class="branch-num">${b}</span>
+      <input class="b-name-input branch-input" data-branch="${b}" type="text"
+             value="${settings.branchNames[b] || 'Branch '+b}" placeholder="Branch name">
+    </div>`).join('');
+
+  // Machine visibility list — grouped by branch, all machines including inactive
+  const excluded = new Set((settings.excludedMachines || []).map(Number));
+  const allMachines = machines.filter(m => m.seqno !== 10000);
+  const machinesByBranch = {};
+  allMachines.forEach(m => {
+    if (!machinesByBranch[m.branchno]) machinesByBranch[m.branchno] = [];
+    machinesByBranch[m.branchno].push(m);
+  });
+
+  document.getElementById('machine-visibility-list').innerHTML =
+    Object.keys(machinesByBranch).sort((a,b)=>a-b).map(b => `
+      <div class="machine-list-branch">
+        <div class="machine-list-branch-label">${branchName(b)}</div>
+        <div class="machine-list-items">
+          ${machinesByBranch[b].map(m => {
+            const isExcluded = excluded.has(Number(m.seqno));
+            const isInactive = !isActive(m);
+            return `
+              <label class="machine-toggle-row ${isExcluded ? 'excluded' : ''}">
+                <input type="checkbox" class="machine-toggle"
+                  data-seqno="${m.seqno}"
+                  ${isExcluded ? '' : 'checked'}
+                  onchange="this.closest('.machine-toggle-row').classList.toggle('excluded', !this.checked)">
+                <span class="mt-name">${m.machine_name}${isInactive ? ' <span style="color:var(--faint);font-size:10px;">(inactive)</span>' : ''}</span>
+                <span class="mt-id">#${m.seqno}</span>
+              </label>`;
+          }).join('')}
+        </div>
+      </div>`).join('') || '<div style="color:var(--faint);font-size:13px;">Load data first — machines appear after connecting to Supabase.</div>';
+
+  // Branch material settings
+  const matBranches = [...new Set(machines.map(m => m.branchno))].sort((a,b)=>a-b);
+  document.getElementById('branch-material-inputs').innerHTML = matBranches.map(b => {
+    const mat = (settings.branchMaterial || {})[b] || {};
+    return `
+      <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:8px;align-items:center;margin-bottom:8px;">
+        <div style="font-size:13px;">${branchName(b)} <span style="color:var(--faint);font-size:11px;">#${b}</span></div>
+        <input type="number" class="branch-block-m3" data-branch="${b}"
+               value="${mat.blockM3 || ''}" placeholder="e.g. 2.88" step="0.01" min="0"
+               style="width:100%;">
+        <input type="number" class="branch-waste-pct" data-branch="${b}"
+               value="${mat.wastePct || ''}" placeholder="e.g. 5" step="0.1" min="0" max="100"
+               style="width:100%;">
+      </div>`;
+  }).join('') || '<div style="color:var(--faint);font-size:13px;">Load data first.</div>';
+
+  // Grade names — let staff rename ERP grade codes to something recognisable
+  const allGrades = [...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))].sort();
+  document.getElementById('grade-names-list').innerHTML = allGrades.length
+    ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;">
+        ${allGrades.map(g => `
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span class="mono" style="font-size:12px;color:var(--faint);min-width:70px;">${g}</span>
+            <input type="text" class="grade-name-input" data-grade="${g}"
+                   value="${(settings.gradeNames||{})[g] || ''}" placeholder="e.g. Standard White"
+                   style="flex:1;">
+          </div>`).join('')}
+      </div>`
+    : '<div style="color:var(--faint);font-size:13px;">Grades appear here after data loads.</div>';
+
+  // Grade visibility — collect all known grades from stock items
+  const excGrades = new Set(settings.excludedGrades || []);
+  document.getElementById('grade-visibility-list').innerHTML = allGrades.length
+    ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:4px;">
+        ${allGrades.map(g => `
+          <label class="machine-toggle-row ${excGrades.has(g) ? 'excluded' : ''}">
+            <input type="checkbox" class="grade-toggle" data-grade="${g}"
+              ${excGrades.has(g) ? '' : 'checked'}
+              onchange="this.closest('.machine-toggle-row').classList.toggle('excluded', !this.checked)">
+            <span class="mt-name">${displayGrade(g)}${displayGrade(g)!==g ? ` <span style="color:var(--faint);font-size:10px;">(${g})</span>` : ''}</span>
+          </label>`).join('')}
+      </div>`
+    : '<div style="color:var(--faint);font-size:13px;">Grades appear here after data loads.</div>';
+  document.getElementById('thresh-over').value      = settings.threshOver;
+  document.getElementById('work-days').value        = settings.workDays;
+  document.getElementById('supa-url').value         = settings.supaUrl;
+  document.getElementById('supa-key').value         = settings.supaKey;
+  document.getElementById('refresh-interval').value = settings.refreshInterval;
+}
+
+// ══════════════════════════════════════════════
+// SUPABASE FETCH
+// ══════════════════════════════════════════════
+function supaHeaders() {
+  return {
+    "apikey": settings.supaKey,
+    "Authorization": `Bearer ${settings.supaKey}`,
+  };
+}
+
+function setStatus(msg, colour) {
+  const el = document.getElementById('data-status');
+  if (el) el.innerHTML = `<span style="color:${colour||'inherit'}">${msg}</span>`;
+}
+
+// Generic paginated fetch for any Supabase table
+async function fetchAllPages(table, order, pageSize = 1000, filter = '') {
+  let all = [];
+  let from = 0;
+  const filterStr = filter ? `&${filter}` : '';
+  while (true) {
+    const res = await fetch(
+      `${settings.supaUrl}/rest/v1/${table}?select=*&order=${order}${filterStr}`,
+      { headers: { ...supaHeaders(), "Range": `${from}-${from + pageSize - 1}`, "Range-Unit": "items", "Prefer": "count=none" } }
+    );
+    if (!res.ok) { console.error(`${table} fetch failed at page from=${from}:`, res.status); break; }
+    const page = await res.json();
+    all = all.concat(page);
+    if (page.length < pageSize) break;
+    from += pageSize;
+  }
+  return all;
+}
+
+async function fetchFromSupabase() {
+  if (!settings.supaUrl || !settings.supaKey) return false;
+  try {
+    // Clear stale data first so old rows can't persist if fetch succeeds
+    machines   = [];
+    schedule   = [];
+    salesLines = [];
+    stockItems = [];
+
+    const mRes = await fetch(
+      `${settings.supaUrl}/rest/v1/capacity_machines?select=*&order=seqno.asc`,
+      { headers: supaHeaders() }
+    );
+    if (!mRes.ok) { console.error('machines fetch failed', mRes.status); return false; }
+    const mData = await mRes.json();
+
+    const sData = await fetchAllPages('capacity_schedule', 'startdate.asc', 1000, 'iscomplete=in.(0,1,4)');
+
+    machines = mData;
+    schedule = sData;
+
+    // Fetch sales lines — paginated (same pattern as schedule)
+    salesLines = await fetchAllPages('capacity_sales_lines', 'solineid.asc');
+    console.log(`Sales lines loaded: ${salesLines.length}, solineid range: ${salesLines[0]?.solineid} - ${salesLines[salesLines.length-1]?.solineid}`);
+
+    // Fetch stock items — paginated
+    stockItems = await fetchAllPages('capacity_stock_items', 'stockcode.asc');
+    console.log(`Stock items loaded: ${stockItems.length}`);
+
+    console.log(`Loaded ${salesLines.length} sales lines, ${stockItems.length} stock items`);
+
+    console.log(`Loaded ${machines.length} machines, ${schedule.length} schedule rows`);
+    if (schedule.length > 0) console.log('Sample schedule row:', schedule[0]);
+    if (machines.length > 0) console.log('Sample machine row:', machines[0]);
+
+    const now = new Date().toLocaleTimeString('en-NZ', {hour:'2-digit', minute:'2-digit'});
+    setStatus(`🟢 Live · ${now}`, 'var(--green)');
+    return true;
+  } catch(e) {
+    console.error('Supabase fetch error', e);
+    setStatus('🔴 Fetch failed', 'var(--red)');
+    return false;
+  }
+}
+
+async function manualRefresh() {
+  setStatus('⏳ Refreshing...', 'var(--amber)');
+  const ok = await fetchFromSupabase();
+  if (ok) {
+    refreshBranchFilters();
+    renderMachineCapacityPage();
+    renderJobs();
+  }
+}
+
+// ══════════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════════
+async function init() {
+  if (!settings.supaUrl || !settings.supaKey) {
+    setStatus('⚙️ Add credentials in Settings', 'var(--amber)');
+    refreshBranchFilters();
+    renderDashboard();
+    return;
+  }
+
+  setStatus('⏳ Loading...', 'var(--amber)');
+  // Pull shared settings (branch names, thresholds, grade names, exclusions, etc)
+  // from Supabase first, so this device matches every other device using the app.
+  await loadSharedSettingsFromSupabase();
+  await fetchFromSupabase();
+  refreshBranchFilters();
+  renderDashboard();
+
+  if (settings.refreshInterval > 0) {
+    setInterval(async () => {
+      await loadSharedSettingsFromSupabase();
+      const ok = await fetchFromSupabase();
+      if (ok) {
+        refreshBranchFilters();
+        const activePage = document.querySelector('.page.active')?.id;
+        if (activePage === 'page-utilisation') renderMachineCapacityPage();
+        if (activePage === 'page-jobs')        renderJobs();
+        if (activePage === 'page-dashboard')   renderDashboard();
+      }
+    }, settings.refreshInterval * 60 * 1000);
+  }
+}
+
+init();
+</script>
+</body>
+</html>
