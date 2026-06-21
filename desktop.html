@@ -2325,11 +2325,22 @@ async function renderDashStockAlerts(branchFilter) {
     : rmData.branches.map(b => b.id);
   console.log('[dashboard] rm branches available:', rmData.branches.map(b=>b.id), '| using branchIds:', branchIds);
 
-  const sections = branchIds.map(bid => {
-    const branchObj = rmData.branches.find(b => b.id === bid);
-    const alerts = buildStockAlerts(bid);
-    if (!alerts.length) return '';
+  // Pre-compute alerts per branch first so we know the TOTAL alert count before
+  // rendering — this drives a density tier (normal/compact/dense) so cards
+  // shrink (font, padding, min-width) rather than the section just scrolling
+  // and hiding information when many alerts exist at once.
+  const branchAlerts = branchIds.map(bid => ({ bid, alerts: buildStockAlerts(bid) })).filter(b => b.alerts.length);
+  const totalAlerts = branchAlerts.reduce((s,b) => s + b.alerts.length, 0);
 
+  let tier = 'compact';
+  if (totalAlerts > 6) tier = 'dense';
+
+  const sizing = {
+    compact: { cardMinW: 190, pad: '9px 11px', titleSz: 13, badgeSz: 9.5, labelSz: 9, valSz: 17, orderSz: 11.5, gap: 8, cardMb: 6 },
+    dense:   { cardMinW: 150, pad: '7px 9px',  titleSz: 11.5, badgeSz: 8.5, labelSz: 8, valSz: 14, orderSz: 10.5, gap: 6, cardMb: 4 },
+  }[tier];
+
+  const sections = branchAlerts.map(({bid, alerts}) => {
     const cards = alerts.map(a => {
       const statusCol = a.status === 'critical' ? 'var(--red)' : 'var(--amber)';
       const statusLbl = a.status === 'critical' ? 'CRITICAL' : 'LOW';
@@ -2346,35 +2357,30 @@ async function renderDashStockAlerts(branchFilter) {
         orderCol = slowerThanCover ? 'var(--amber)' : 'var(--green)';
       }
       return `
-        <div style="flex:1;min-width:260px;background:var(--surface);border:1px solid ${statusCol}44;border-left:4px solid ${statusCol};border-radius:8px;padding:14px 16px;">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-            <span style="font-size:16px;font-weight:700;">${a.material.name}</span>
-            <span style="font-size:11px;font-weight:700;letter-spacing:0.5px;color:${statusCol};background:${statusCol}22;padding:3px 10px;border-radius:5px;">${statusLbl}</span>
+        <div style="flex:1;min-width:${sizing.cardMinW}px;background:var(--surface);border:1px solid ${statusCol}44;border-left:4px solid ${statusCol};border-radius:8px;padding:${sizing.pad};">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:${sizing.cardMb}px;">
+            <span style="font-size:${sizing.titleSz}px;font-weight:700;">${a.material.name}</span>
+            <span style="font-size:${sizing.badgeSz}px;font-weight:700;letter-spacing:0.5px;color:${statusCol};background:${statusCol}22;padding:2px 8px;border-radius:5px;white-space:nowrap;">${statusLbl}</span>
           </div>
-          <div style="display:flex;gap:20px;margin-bottom:10px;">
+          <div style="display:flex;gap:${sizing.gap+8}px;margin-bottom:${sizing.cardMb}px;">
             <div>
-              <div style="font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:0.3px;margin-bottom:2px;">Current Stock</div>
-              <div style="font-family:var(--mono);font-size:22px;font-weight:700;color:${a.stock<0?'var(--red)':'var(--text)'};line-height:1;">${stockStr}</div>
+              <div style="font-size:${sizing.labelSz}px;color:var(--faint);text-transform:uppercase;letter-spacing:0.3px;margin-bottom:2px;">Current Stock</div>
+              <div style="font-family:var(--mono);font-size:${sizing.valSz}px;font-weight:700;color:${a.stock<0?'var(--red)':'var(--text)'};line-height:1;">${stockStr}</div>
             </div>
             <div>
-              <div style="font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:0.3px;margin-bottom:2px;">Cover</div>
-              <div style="font-family:var(--mono);font-size:22px;font-weight:700;color:${statusCol};line-height:1;">${coverStr}</div>
+              <div style="font-size:${sizing.labelSz}px;color:var(--faint);text-transform:uppercase;letter-spacing:0.3px;margin-bottom:2px;">Cover</div>
+              <div style="font-family:var(--mono);font-size:${sizing.valSz}px;font-weight:700;color:${statusCol};line-height:1;">${coverStr}</div>
             </div>
           </div>
-          <div style="font-size:13px;color:${orderCol};font-weight:600;padding-top:10px;border-top:1px solid var(--border);">${orderStr}</div>
+          <div style="font-size:${sizing.orderSz}px;color:${orderCol};font-weight:600;padding-top:${sizing.cardMb}px;border-top:1px solid var(--border);">${orderStr}</div>
         </div>`;
     }).join('');
 
     return `
-      <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:14px;">
-        <div style="padding:12px 18px;background:var(--surface);border-bottom:1px solid var(--border);font-size:16px;font-weight:700;">
-          ${branchObj?.name || bid}
-        </div>
-        <div style="display:flex;flex-wrap:wrap;gap:12px;padding:14px;">
-          ${cards}
-        </div>
+      <div style="display:flex;flex-wrap:wrap;gap:${sizing.gap}px;margin-bottom:${sizing.cardMb+4}px;">
+        ${cards}
       </div>`;
-  }).filter(s => s !== '');
+  });
 
   el.innerHTML = sections.join('') || '<div class="mat-no-data" style="color:var(--green);font-size:16px;font-weight:600;padding:20px;">No stock alerts — all materials at healthy levels.</div>';
 }
@@ -2887,7 +2893,7 @@ async function renderBlockStock(silent) {
                     if(!st||(st.x_grade||'').trim()!==grade||!parseFloat(st.x_cubic)||blockM3===0||wasteFac<=0) return [];
                     const lq=(parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
                     const bl=Math.ceil(parseFloat(st.x_cubic)*Math.max(0,lq)/(blockM3*wasteFac));
-                    return bl>0?[{date:j.completime||j.finishdate,type:'used',qty:-bl,note:`Job #${j.seqno} — ${sl.stockcode}`,id:null,table:null}]:[];
+                    return bl>0?[{date:j.completime||j.finishdate,type:'used',qty:-bl,note:`Job #${sl.hdr_seqno} — ${sl.stockcode}`,id:null,table:null}]:[];
                   }),
                 ].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,20);
 
