@@ -733,6 +733,7 @@
     -moz-appearance: textfield;
   }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
 </head>
 <body>
 <div class="shell">
@@ -763,6 +764,10 @@
       <div class="nav-link" onclick="showPage('blockstock')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="10" y1="14" x2="14" y2="14"/></svg>
         Block Stock
+      </div>
+      <div class="nav-link" onclick="showPage('analytics')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+        Analytics
       </div>
       <div class="nav-link" onclick="showPage('settings')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93l-1.41 1.41M4.93 4.93l1.41 1.41M4.93 19.07l1.41-1.41M19.07 19.07l-1.41-1.41M21 12h-3M6 12H3M12 3V0M12 24v-3"/></svg>
@@ -966,6 +971,28 @@
       </div>
     </div>
 
+    <!-- ══ ANALYTICS PAGE ══ -->
+    <div class="page" id="page-analytics">
+      <div class="page-header">
+        <div>
+          <h1>Analytics</h1>
+          <div class="subtitle">Actual block production vs requirement — last 4 weeks</div>
+        </div>
+        <div class="controls">
+          <select id="branch-filter-an" onchange="setBranch(this.value)">
+            
+          </select>
+        </div>
+      </div>
+      <div class="content">
+        <div id="analytics-summary" style="display:flex;gap:14px;margin-bottom:20px;flex-wrap:wrap;"></div>
+        <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:20px;">
+          <canvas id="analytics-chart" height="90"></canvas>
+        </div>
+        <div id="analytics-grade-breakdown" style="margin-top:20px;"></div>
+      </div>
+    </div>
+
     <!-- Stock Entry Modal -->
     <div id="modal-overlay" class="modal-overlay" onmousedown="_modalMouseDownTarget=event.target">
       <div class="modal" onclick="event.stopPropagation()" onmousedown="event.stopPropagation()">
@@ -1132,6 +1159,7 @@
 // STATE
 // ══════════════════════════════════════════════
 let settings = loadSettings();
+let sharedSettingsLoaded = false; // true once loadSharedSettingsFromSupabase() succeeds at least once this session
 let currentWeekOffset = 0;
 let globalBranch = 'all';   // shared branch filter across all pages
 let machines   = [];
@@ -1180,6 +1208,7 @@ async function loadSharedSettingsFromSupabase() {
     // Merge shared settings on top of current (local supaUrl/supaKey are preserved
     // since 'shared' never contains them — see saveSettings)
     settings = { ...settings, ...shared };
+    sharedSettingsLoaded = true;
     return true;
   } catch (e) {
     console.warn('Could not load shared settings from Supabase:', e);
@@ -1251,6 +1280,27 @@ async function saveSettings() {
   // is reachable). Everything else is the shared/universal config pushed to
   // Supabase so other devices pick it up automatically.
   localStorage.setItem('expol_capacity_settings', JSON.stringify({ supaUrl: settings.supaUrl, supaKey: settings.supaKey }));
+
+  // SAFETY CHECK: if shared settings have never been successfully pulled this
+  // session (e.g. this is a brand new device where credentials were *just*
+  // typed in for the first time), pushing now would overwrite every other
+  // device's branch names / grade names / exclusions with this page's blank
+  // defaults. Pull first, re-render the Settings form with the real values,
+  // and ask the person to review and save again rather than silently wiping
+  // shared config.
+  if (!sharedSettingsLoaded && settings.supaUrl && settings.supaKey) {
+    const pulled = await loadSharedSettingsFromSupabase();
+    if (pulled) {
+      renderSettings();
+      refreshBranchFilters();
+      renderMachineCapacityPage();
+      alert('Connected for the first time — loaded the existing shared settings from other devices. Review the form below and click Save again to confirm (this prevents accidentally overwriting shared config with blank values).');
+      return;
+    }
+    // If the pull failed (e.g. table doesn't exist yet, or genuinely first
+    // device ever), fall through and push as normal — there's nothing to lose.
+  }
+
   const pushed = await saveSharedSettingsToSupabase();
   document.getElementById('save-msg').classList.add('show');
   document.getElementById('save-msg').textContent = pushed
@@ -1417,6 +1467,7 @@ function showPage(name) {
   if (name === 'jobs')         renderJobs();
   if (name === 'materials')    renderMaterials();
   if (name === 'blockstock')   renderBlockStock();
+  if (name === 'analytics')    renderAnalytics();
 }
 
 // Renders both This Week and 4-Week Forecast sections on the merged Machine Capacity page
@@ -1440,7 +1491,7 @@ function getBranches() {
 
 function setBranch(val) {
   globalBranch = val;
-  ['branch-filter','branch-filter-j','branch-filter-mat','branch-filter-bs','branch-filter-dash'].forEach(id => {
+  ['branch-filter','branch-filter-j','branch-filter-mat','branch-filter-bs','branch-filter-dash','branch-filter-an'].forEach(id => {
     const el = document.getElementById(id);
     if (el && el.value !== val) el.value = val;
   });
@@ -1449,12 +1500,13 @@ function setBranch(val) {
   if (activePage === 'page-jobs')       renderJobs();
   if (activePage === 'page-materials')  renderMaterials();
   if (activePage === 'page-blockstock') renderBlockStock();
+  if (activePage === 'page-analytics')  renderAnalytics();
   if (activePage === 'page-dashboard')  renderDashboard();
 }
 
 function refreshBranchFilters() {
   const branches = getBranches();
-  ['branch-filter','branch-filter-j','branch-filter-mat','branch-filter-bs','branch-filter-dash'].forEach(id => {
+  ['branch-filter','branch-filter-j','branch-filter-mat','branch-filter-bs','branch-filter-dash','branch-filter-an'].forEach(id => {
     const sel = document.getElementById(id);
     if (!sel) return;
     sel.innerHTML = branches.map(b => `<option value="${b}">${branchName(b)}</option>`).join('');
@@ -2232,7 +2284,7 @@ function renderDashBlockProduction(branches) {
         <div style="flex:1;">
           <div style="font-size:9px;color:var(--muted);margin-bottom:3px;display:flex;justify-content:space-between;align-items:center;padding:0 3px;">
             <span>${wk.label}</span>
-            <span style="font-family:var(--mono);font-weight:700;color:${balCol};font-size:13px;">${wk.endBalance>=0?'+':''}${wk.endBalance} end bal</span>
+            <span style="font-family:var(--mono);font-weight:700;color:${balCol};font-size:13px;">${wk.endBalance>=0?'+':''}${Math.round(wk.endBalance)} end bal</span>
           </div>
           <div style="display:flex;gap:3px;">${dayCells}</div>
         </div>`;
@@ -2499,7 +2551,13 @@ function calcBlockStock(branchNo, grade) {
   const slMap      = Object.fromEntries(salesLines.map(l => [Number(l.solineid), l]));
   const machineMap = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
 
-  let usedBlocks = 0;
+  // Sum raw cubic across ALL completed jobs first, then convert to blocks ONCE
+  // at the end — NOT per job. Rounding up per job (Math.ceil per job, then
+  // summing) systematically overcounts usage: e.g. five jobs each using 0.3
+  // of a block would wrongly total 5 blocks instead of the true 1.5. Block
+  // rounding only belongs in the requirement/forecast totals shown to staff,
+  // not in the underlying stock deduction itself.
+  let usedCubic = 0;
   schedule
     .filter(j => Number(j.iscomplete) === 1 && (j.completime || j.finishdate) >= baseDate)
     .forEach(j => {
@@ -2513,9 +2571,9 @@ function calcBlockStock(branchNo, grade) {
       const lineQty = (parseFloat(sl.ord_quant)   || 0)
                     - (parseFloat(sl.bkord_quant)  || 0)
                     - (parseFloat(sl.sup_quant)    || 0);
-      const cubic   = parseFloat(stock.x_cubic) * Math.max(0, lineQty);
-      usedBlocks   += Math.ceil(cubic / (blockM3 * wasteFac));
+      usedCubic += parseFloat(stock.x_cubic) * Math.max(0, lineQty);
     });
+  const usedBlocks = (blockM3 > 0 && wasteFac > 0) ? usedCubic / (blockM3 * wasteFac) : 0;
 
   const current = baseQty + produced + adjustments - usedBlocks;
   return { baseQty, baseDate, produced, adjustments, usedBlocks, current };
@@ -2559,7 +2617,7 @@ function getForecastForWeek(bn, grade, workDayDates) {
 // Save template row (upsert via Supabase)
 async function saveTemplateRow(bn, grade, dow, qty) {
   const res = await fetch(
-    `${settings.supaUrl}/rest/v1/block_production_template`,
+    `${settings.supaUrl}/rest/v1/block_production_template?on_conflict=branch_no,grade,day_of_week`,
     {
       method: 'POST',
       headers: { ...supaHeaders(), 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates,return=minimal' },
@@ -2756,7 +2814,7 @@ async function renderBlockStock(silent) {
           <div style="flex:1;padding:6px 10px;border-right:1px solid var(--border);display:flex;align-items:center;gap:10px;">
             <div style="font-size:10px;color:var(--muted);min-width:48px;line-height:1.4;">${wk.label}</div>
             <div style="flex:1;text-align:center;">
-              <div style="font-family:var(--mono);font-size:18px;font-weight:700;color:${col};line-height:1;">${runBal>=0?'+':''}${runBal}</div>
+              <div style="font-family:var(--mono);font-size:18px;font-weight:700;color:${col};line-height:1;">${runBal>=0?'+':''}${Math.round(runBal)}</div>
               <div style="font-size:9px;color:var(--faint);margin-top:2px;">${wk.required} req / ${wk.forecast} fcast</div>
             </div>
           </div>`;
@@ -2818,7 +2876,7 @@ async function renderBlockStock(silent) {
             <span style="font-size:13px;font-weight:700;">${displayGrade(grade)}</span>
             <span style="font-size:11px;color:var(--muted);">${branchName(bn)}</span>
             ${blockM3===0 ? '<span style="font-size:10px;color:var(--red);">set block m³ in settings</span>' : ''}
-            <span style="font-size:12px;color:${stockCol};font-family:var(--mono);font-weight:600;margin-left:auto;">${currentStock} in stock</span>
+            <span style="font-size:12px;color:${stockCol};font-family:var(--mono);font-weight:600;margin-left:auto;">${Math.round(currentStock)} in stock</span>
             <button onclick="showForecastTemplateModal('${bn}','${grade}')" style="font-size:11px;background:var(--card);border:1px solid var(--border2);color:var(--accent);padding:2px 8px;border-radius:5px;cursor:pointer;font-weight:500;">Set forecast</button>
             <button onclick="showStockEntryModal('${bn}','${grade}')" style="font-size:11px;background:var(--card);border:1px solid var(--border2);color:var(--muted);padding:2px 8px;border-radius:5px;cursor:pointer;">+ Stock</button>
             <button onclick="showProductionModal('${bn}','${grade}')" style="font-size:11px;background:var(--card);border:1px solid var(--border2);color:var(--muted);padding:2px 8px;border-radius:5px;cursor:pointer;">+ Actual</button>
@@ -2852,7 +2910,7 @@ async function renderBlockStock(silent) {
                     <span style="color:var(--faint);">Required</span><span style="font-family:var(--mono);font-weight:600;color:var(--red);text-align:right;">${wk.required}</span>
                     <span style="color:var(--faint);">Forecast</span><span style="font-family:var(--mono);font-weight:600;color:var(--green);text-align:right;">${wk.forecast}</span>
                     <span style="color:var(--faint);">Net</span><span style="font-family:var(--mono);font-weight:600;color:${netCol};text-align:right;">${net>=0?'+':''}${net}</span>
-                    <span style="color:var(--faint);font-weight:600;">Balance</span><span style="font-family:var(--mono);font-size:12px;font-weight:700;color:${balCol};text-align:right;">${bal>=0?'+':''}${bal}</span>
+                    <span style="color:var(--faint);font-weight:600;">Balance</span><span style="font-family:var(--mono);font-size:12px;font-weight:700;color:${balCol};text-align:right;">${bal>=0?'+':''}${Math.round(bal)}</span>
                   </div>
                 </div>`;
               }).join('')}
@@ -2861,9 +2919,9 @@ async function renderBlockStock(silent) {
             <div style="padding:7px 14px;font-size:11px;color:var(--muted);">
               ${stock ? `Base ${fmtShort(stock.baseDate)}: <span style="font-family:var(--mono);color:var(--text);">${stock.baseQty}</span>
                 &nbsp;+&nbsp;<span style="color:var(--green);">+${stock.produced}</span>
-                &nbsp;-&nbsp;<span style="color:var(--red);">${stock.usedBlocks}</span>
+                &nbsp;-&nbsp;<span style="color:var(--red);">${stock.usedBlocks.toFixed(1)}</span>
                 &nbsp;adj&nbsp;<span style="color:var(--amber);">${stock.adjustments>=0?'+':''}${stock.adjustments}</span>
-                &nbsp;=&nbsp;<span style="font-family:var(--mono);color:${stockCol};font-weight:700;">${currentStock}</span>`
+                &nbsp;=&nbsp;<span style="font-family:var(--mono);color:${stockCol};font-weight:700;">${Math.round(currentStock)}</span>`
               : 'No opening stock entry yet — click + Stock to add one.'}
             </div>
             <!-- Activity log -->
@@ -2892,7 +2950,11 @@ async function renderBlockStock(silent) {
                     const st=stMap[sl.stockcode];
                     if(!st||(st.x_grade||'').trim()!==grade||!parseFloat(st.x_cubic)||blockM3===0||wasteFac<=0) return [];
                     const lq=(parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
-                    const bl=Math.ceil(parseFloat(st.x_cubic)*Math.max(0,lq)/(blockM3*wasteFac));
+                    // Show the job's true fractional block usage (1 decimal) —
+                    // NOT rounded up. Rounding each job individually before
+                    // summing was the original bug; this list must reflect the
+                    // same unrounded-per-job figures calcBlockStock now uses.
+                    const bl=parseFloat(st.x_cubic)*Math.max(0,lq)/(blockM3*wasteFac);
                     return bl>0?[{date:j.completime||j.finishdate,type:'used',qty:-bl,note:`Job #${sl.hdr_seqno} — ${sl.stockcode}`,id:null,table:null}]:[];
                   }),
                 ].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,20);
@@ -2905,7 +2967,7 @@ async function renderBlockStock(silent) {
                     <span class="mono" style="font-size:11px;">${fmtShort(h.date)}</span>
                     <span class="bs-type-badge ${clsMap[h.type]}">${typeMap[h.type]}</span>
                     <span class="td-muted" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${h.note}">${h.note}</span>
-                    <span class="mono" style="text-align:right;color:${h.qty>=0?'var(--green)':'var(--red)'};">${h.qty>=0?'+':''}${h.qty}</span>
+                    <span class="mono" style="text-align:right;color:${h.qty>=0?'var(--green)':'var(--red)'};">${h.qty>=0?'+':''}${h.type==='used'?h.qty.toFixed(1):h.qty}</span>
                     <span style="text-align:right;">${h.id?`<button onclick="deleteBlockEntry('${h.table}','${h.id}','${bn}','${grade}')" style="background:none;border:none;color:var(--faint);cursor:pointer;font-size:11px;padding:2px 5px;border-radius:3px;">x</button>`:''}</span>
                   </div>`).join('') || '<div style="padding:12px 14px;font-size:12px;color:var(--faint);">No entries yet</div>';
               })()}
@@ -2945,6 +3007,152 @@ async function renderBlockStock(silent) {
     </div>`;
 
   container.innerHTML = (cards.length ? totalsRow : '') + (cards.join('') || '<div class="mat-no-data">No block stock data. Select a branch and add an opening stock entry.</div>');
+}
+
+// ══════════════════════════════════════════════
+// ANALYTICS PAGE — actual block production vs requirement, last 4 weeks
+// ══════════════════════════════════════════════
+let analyticsChartInstance = null;
+
+function renderAnalytics() {
+  const bn = globalBranch !== 'all' ? Number(globalBranch) : getBranches()[0];
+  if (bn === undefined) return;
+
+  const mat      = (settings.branchMaterial || {})[bn] || {};
+  const blockM3  = parseFloat(mat.blockM3)  || 0;
+  const wasteFac = 1 - ((parseFloat(mat.wastePct)||0)/100);
+  const stMap    = Object.fromEntries(stockItems.map(s => [s.stockcode, s]));
+  const slMap    = Object.fromEntries(salesLines.map(l => [Number(l.solineid), l]));
+  const mMap     = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
+
+  const allGrades = [...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))]
+    .filter(g => !(settings.excludedGrades||[]).includes(g)).sort();
+
+  // Last 4 weeks: 3 weeks ago through this week, oldest first
+  const weeksBack = [-3, -2, -1, 0].map(offset => {
+    const days     = getWeekDates(offset);
+    const workDays = days.slice(0, settings.workDays).map(d => fmtDateLocal(d));
+    const label    = fmtShort(days[0]);
+    return { workDays, label, offset };
+  });
+
+  // Per-grade, per-week actual production and required, then totalled across
+  // grades for the headline chart (grade breakdown shown separately below)
+  const perGrade = allGrades.map(grade => {
+    const weekly = weeksBack.map(wk => {
+      // Actual: sum real entries only — past weeks shouldn't fall back to the
+      // weekly template, since that's a forecast tool, not a historical record
+      const actual = wk.workDays.reduce((s, d) => {
+        const a = getActualProduction(bn, grade, d);
+        return s + (a ? a.qty : 0);
+      }, 0);
+
+      // Required: same cubic-sum-then-round-once pattern used everywhere else
+      let cubic = 0;
+      schedule.filter(j =>
+        (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 1 || Number(j.iscomplete) === 4) &&
+        wk.workDays.includes(parseDate(j.startdate))
+      ).forEach(j => {
+        const m = mMap[Number(j.machineno)];
+        if (!m || Number(m.branchno) !== bn) return;
+        const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
+        const st = stMap[sl.stockcode];
+        if (!st || (st.x_grade||'').trim() !== grade || !parseFloat(st.x_cubic)) return;
+        const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
+        cubic += parseFloat(st.x_cubic) * Math.max(0, lq);
+      });
+      const required = (blockM3>0 && wasteFac>0 && cubic>0) ? Math.ceil(cubic/(blockM3*wasteFac)) : 0;
+
+      return { label: wk.label, actual, required };
+    });
+    return { grade, weekly };
+  }).filter(g => g.weekly.some(w => w.actual > 0 || w.required > 0));
+
+  // Totals per week across all grades, for the headline chart
+  const totalsByWeek = weeksBack.map((wk, wi) => ({
+    label: wk.label,
+    actual:   perGrade.reduce((s,g) => s + g.weekly[wi].actual, 0),
+    required: perGrade.reduce((s,g) => s + g.weekly[wi].required, 0),
+  }));
+
+  // ── Summary tiles ──
+  const summaryEl = document.getElementById('analytics-summary');
+  const totalActual = totalsByWeek.reduce((s,w) => s+w.actual, 0);
+  const totalReq     = totalsByWeek.reduce((s,w) => s+w.required, 0);
+  const pctOfReq      = totalReq > 0 ? (totalActual/totalReq*100) : null;
+  const pctCol = pctOfReq == null ? 'var(--muted)' : pctOfReq >= 100 ? 'var(--green)' : pctOfReq >= 85 ? 'var(--amber)' : 'var(--red)';
+
+  const tile = (label, val, col, sub) => `
+    <div style="flex:1;min-width:160px;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 16px;">
+      <div style="font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:0.3px;margin-bottom:4px;">${label}</div>
+      <div style="font-family:var(--mono);font-size:26px;font-weight:700;color:${col};line-height:1;">${val}</div>
+      ${sub ? `<div style="font-size:11px;color:var(--muted);margin-top:4px;">${sub}</div>` : ''}
+    </div>`;
+
+  summaryEl.innerHTML =
+    tile('Total Produced', totalActual.toLocaleString(), 'var(--text)', `${branchName(bn)} — last 4 weeks`) +
+    tile('Total Required', totalReq.toLocaleString(), 'var(--text)', 'Outstanding + completed jobs') +
+    tile('Performance', pctOfReq != null ? pctOfReq.toFixed(0)+'%' : '—', pctCol, pctOfReq != null ? 'of required production' : 'No requirement in range');
+
+  // ── Chart ──
+  const canvas = document.getElementById('analytics-chart');
+  if (analyticsChartInstance) { analyticsChartInstance.destroy(); analyticsChartInstance = null; }
+  if (typeof Chart !== 'undefined' && canvas) {
+    analyticsChartInstance = new Chart(canvas.getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels: totalsByWeek.map(w => w.label),
+        datasets: [
+          { label: 'Actual production', data: totalsByWeek.map(w => w.actual), backgroundColor: '#f97316', borderRadius: 4 },
+          { label: 'Required', data: totalsByWeek.map(w => w.required), type: 'line', borderColor: '#3b82f6', backgroundColor: '#3b82f6', tension: 0.3, pointRadius: 4, pointBackgroundColor: '#3b82f6', borderWidth: 2 },
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { labels: { color: '#e8ecf4', font: { size: 12 } } },
+          tooltip: { mode: 'index', intersect: false },
+        },
+        scales: {
+          x: { ticks: { color: '#8892a4' }, grid: { color: '#232b3d' } },
+          y: { ticks: { color: '#8892a4' }, grid: { color: '#232b3d' }, beginAtZero: true },
+        }
+      }
+    });
+  }
+
+  // ── Per-grade breakdown table ──
+  const breakdownEl = document.getElementById('analytics-grade-breakdown');
+  if (!perGrade.length) {
+    breakdownEl.innerHTML = '<div class="mat-no-data">No production data for this branch in the last 4 weeks.</div>';
+    return;
+  }
+
+  breakdownEl.innerHTML = `
+    <div style="font-size:15px;font-weight:700;margin-bottom:10px;">By Grade</div>
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;">
+      <div style="display:flex;padding:8px 14px;background:var(--surface);border-bottom:1px solid var(--border);font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.3px;">
+        <div style="flex:1.4;">Grade</div>
+        ${weeksBack.map(wk => `<div style="flex:1;text-align:center;">${wk.label}</div>`).join('')}
+        <div style="flex:1;text-align:center;">Total</div>
+        <div style="flex:1;text-align:center;">Performance</div>
+      </div>
+      ${perGrade.map(g => {
+        const gTotalActual = g.weekly.reduce((s,w)=>s+w.actual,0);
+        const gTotalReq    = g.weekly.reduce((s,w)=>s+w.required,0);
+        const gPct = gTotalReq > 0 ? (gTotalActual/gTotalReq*100) : null;
+        const gCol = gPct == null ? 'var(--muted)' : gPct >= 100 ? 'var(--green)' : gPct >= 85 ? 'var(--amber)' : 'var(--red)';
+        return `
+        <div style="display:flex;padding:9px 14px;border-bottom:1px solid var(--border);align-items:center;font-size:12.5px;">
+          <div style="flex:1.4;font-weight:600;">${displayGrade(g.grade)}</div>
+          ${g.weekly.map(w => `<div style="flex:1;text-align:center;font-family:var(--mono);">${w.actual}<span style="color:var(--faint);"> / ${w.required}</span></div>`).join('')}
+          <div style="flex:1;text-align:center;font-family:var(--mono);font-weight:700;">${gTotalActual} / ${gTotalReq}</div>
+          <div style="flex:1;text-align:center;font-family:var(--mono);font-weight:700;color:${gCol};">${gPct != null ? gPct.toFixed(0)+'%' : '—'}</div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div style="font-size:10px;color:var(--faint);margin-top:8px;">Each cell shows actual / required blocks for that week.</div>`;
 }
 
 function toggleBsCard(id) {
@@ -3104,9 +3312,9 @@ async function saveModal() {
     if (dt <= todayLocal()) {
       const priorStock = calcBlockStock(bn, grade);
       if (priorStock) {
-        const variance = priorStock.current - qty;
+        const variance = Math.round(priorStock.current) - qty;
         if (variance !== 0) {
-          varianceNote = ` (variance ${variance > 0 ? '+' : ''}${variance} vs system: was ${priorStock.current})`;
+          varianceNote = ` (variance ${variance > 0 ? '+' : ''}${variance} vs system: was ${Math.round(priorStock.current)})`;
         }
       }
     }
