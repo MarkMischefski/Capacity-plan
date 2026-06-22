@@ -2181,7 +2181,7 @@ async function renderDashboard() {
 
   // Ensure block stock data (entries/production/adjustments/template) is loaded
   console.log('[dashboard] block stock state before load:', {entries: blockStockEntries.length, production: blockProduction.length, template: blockProductionTemplate.length, supaUrl: !!settings.supaUrl, supaKey: !!settings.supaKey});
-  if (!blockStockEntries.length && !blockProduction.length && !blockProductionTemplate.length) {
+  if (!blockStockEntries.length && !blockProduction.length && !blockProductionTemplate.length && !cellHighlights.length) {
     await loadBlockStockData();
     console.log('[dashboard] block stock state after load:', {entries: blockStockEntries.length, production: blockProduction.length, template: blockProductionTemplate.length});
   }
@@ -2294,8 +2294,10 @@ function renderDashBlockProduction(branches) {
       const dayReqShare = weekCubic > 0 ? totalRequired * (cubicByDay[d] / weekCubic) : 0;
       if (isFuture) runningBal += fcastQty;   // production: only future days, today's is already in currentStock
       runningBal -= dayReqShare;              // requirement: every day in the window, including today
-      return `<div style="flex:1;text-align:center;">
-        <div style="font-family:var(--mono);font-size:22px;font-weight:700;color:${isToday?'var(--accent)':'var(--text)'};line-height:1;">${fcastQty}</div>
+      const highlighted = isCellHighlighted(bn, grade, d);
+      const cellBg = highlighted ? 'background:#fde04733;border-radius:6px;' : '';
+      return `<div style="flex:1;text-align:center;${cellBg}padding:2px 0;">
+        <div style="font-family:var(--mono);font-size:22px;font-weight:700;color:${highlighted?'#fde047':(isToday?'var(--accent)':'var(--text)')};line-height:1;">${fcastQty > 0 ? fcastQty : '<span style="color:var(--faint);">–</span>'}</div>
       </div>`;
     }).join('');
 
@@ -2473,6 +2475,7 @@ let blockAdjustments       = [];
 let blockProductionTemplate = [];
 let modalMode              = null;
 let bsSelectedGrades       = new Set(); // empty = all grades shown
+let cellHighlights         = []; // [{id, branch_no, grade, entry_date}] — toggleable visual markers, shared between Block Stock and Dashboard
 
 // ── Supabase CRUD helpers ─────────────────────
 async function bsFetch(table) {
@@ -2515,16 +2518,40 @@ async function loadBlockStockData() {
   try {
     const timeout = ms => new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms));
     const safe = async (fn) => { try { return await Promise.race([fn(), timeout(8000)]); } catch(e) { console.warn('Block stock fetch failed/timeout:', e); return []; } };
-    [blockStockEntries, blockProduction, blockAdjustments, blockProductionTemplate] = await Promise.all([
+    [blockStockEntries, blockProduction, blockAdjustments, blockProductionTemplate, cellHighlights] = await Promise.all([
       safe(() => bsFetch('block_stock_entries')),
       safe(() => bsFetch('block_production')),
       safe(() => bsFetch('block_adjustments')),
       safe(() => bsFetchTemplate()),
+      safe(() => bsFetch('capacity_cell_highlights')),
     ]);
-    console.log(`Block stock loaded: ${blockStockEntries.length} entries, ${blockProduction.length} production, ${blockAdjustments.length} adjustments, ${blockProductionTemplate.length} template rows`);
+    console.log(`Block stock loaded: ${blockStockEntries.length} entries, ${blockProduction.length} production, ${blockAdjustments.length} adjustments, ${blockProductionTemplate.length} template rows, ${cellHighlights.length} highlights`);
   } catch(e) {
     console.error('loadBlockStockData failed:', e);
   }
+}
+
+// Returns true if a given branch/grade/date cell is currently highlighted
+function isCellHighlighted(bn, grade, dateStr) {
+  return cellHighlights.some(h => Number(h.branch_no) === Number(bn) && h.grade === grade && h.entry_date === dateStr);
+}
+
+// Toggle a cell's highlight on/off — inserts or deletes the Supabase row,
+// updates local state, and re-renders both Block Stock and Dashboard if the
+// person is on either of those pages (so the change shows up immediately).
+async function toggleCellHighlight(bn, grade, dateStr) {
+  const existing = cellHighlights.find(h => Number(h.branch_no) === Number(bn) && h.grade === grade && h.entry_date === dateStr);
+  if (existing) {
+    await bsDelete('capacity_cell_highlights', existing.id);
+    cellHighlights = cellHighlights.filter(h => h.id !== existing.id);
+  } else {
+    await bsInsert('capacity_cell_highlights', { branch_no: Number(bn), grade, entry_date: dateStr });
+    // Re-fetch just this table so we get the real id back from Supabase
+    cellHighlights = await bsFetch('capacity_cell_highlights');
+  }
+  const activePage = document.querySelector('.page.active')?.id;
+  if (activePage === 'page-blockstock') renderBlockStock(true);
+  if (activePage === 'page-dashboard')  renderDashboard();
 }
 
 // ── Stock calculation ─────────────────────────
@@ -2864,8 +2891,12 @@ async function renderBlockStock(silent) {
           const borderCol = isOverride ? 'var(--blue)' : actualEntry ? 'var(--accent)' : 'var(--border2)';
           const subLabel = isPast ? 'past' : isToday ? 'today' : isOverride ? 'override' : 'template';
           const subCol   = isPast ? 'transparent' : isToday ? 'var(--accent)' : isOverride ? 'var(--blue)' : 'transparent';
-          return `<div style="display:flex;flex-direction:column;align-items:center;gap:2px;opacity:${isPast?'0.35':'1'};">
-            <div style="font-size:10px;color:${isToday?'var(--accent)':'var(--muted)'};font-weight:700;text-transform:uppercase;letter-spacing:0.3px;">${dow}</div>
+          const highlighted = isCellHighlighted(bn, grade, d);
+          const cellBg = highlighted ? 'background:#fde04733;border-radius:6px;padding:3px;' : 'padding:3px;';
+          return `<div style="display:flex;flex-direction:column;align-items:center;gap:2px;opacity:${isPast?'0.35':'1'};${cellBg}">
+            <div style="font-size:10px;color:${highlighted?'#fde047':(isToday?'var(--accent)':'var(--muted)')};font-weight:700;text-transform:uppercase;letter-spacing:0.3px;cursor:pointer;user-select:none;"
+                 title="Click to ${highlighted?'remove':'add'} highlight (shows on Dashboard too)"
+                 onclick="toggleCellHighlight(${bn},'${grade}','${d}')">${dow}${highlighted?' ★':''}</div>
             <input type="number" min="0" value="${qty}"
               style="width:46px;text-align:center;font-family:var(--mono);font-size:12px;padding:3px 2px;
                      border-color:${borderCol};"
