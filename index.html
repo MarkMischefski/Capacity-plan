@@ -1200,7 +1200,7 @@ async function saveStocktakeEntry(bn, grade, dt, qty) {
   if (dt <= todayLocal()) {
     const priorStock = calcBlockStock(bn, grade);
     if (priorStock) {
-      const variance = Math.round(priorStock.current) - qty;
+      const variance = qty - Math.round(priorStock.current);
       if (variance !== 0) varianceNote = ` (variance ${variance > 0 ? '+' : ''}${variance} vs system: was ${Math.round(priorStock.current)})`;
     }
   }
