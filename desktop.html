@@ -804,7 +804,7 @@
 
         <!-- Machine capacity tiles -->
         <div style="flex:0 0 auto;display:flex;flex-direction:column;">
-          <div style="font-size:17px;font-weight:700;color:var(--text);margin-bottom:8px;flex-shrink:0;">Machine Capacity — This Week</div>
+          <div style="font-size:17px;font-weight:700;color:var(--text);margin-bottom:8px;flex-shrink:0;">Machine Capacity — Today</div>
           <div id="dash-capacity-tiles" style="display:flex;gap:12px;overflow-x:auto;padding-bottom:4px;flex-shrink:0;"></div>
         </div>
 
@@ -2215,94 +2215,118 @@ function renderDashBlockProduction(branches) {
   const mMap   = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
   const DOW_LABELS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 
-  const weeks2 = Array.from({length:2}, (_, i) => {
-    const days     = getWeekDates(i);
-    const workDays = days.slice(0, settings.workDays).map(d => fmtDateLocal(d));
-    const label    = `${i===0?'This week':'Next week'} — ${fmtShort(days[0])}`;
-    return { workDays, label };
-  });
+  // Rolling window: today + the next 4 WORKDAYS (Mon-Fri only) — weekends are
+  // skipped entirely since production isn't forecast/planned for them, so a
+  // Friday jumps straight to Monday rather than showing Sat/Sun as blank days.
+  const rollingDays = [];
+  const cursor = new Date();
+  while (rollingDays.length < 5) {
+    const dow = cursor.getDay(); // 0=Sun..6=Sat
+    if (dow !== 0 && dow !== 6) rollingDays.push(fmtDateLocal(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  // Shared day-of-week header row, rendered ONCE above all grade cards
+  const headerCells = rollingDays.map(d => {
+    const isToday = d === today;
+    const dow = DOW_LABELS[(new Date(d+'T00:00:00').getDay()+6)%7];
+    const dnum = new Date(d+'T00:00:00').getDate();
+    return `<div style="flex:1;text-align:center;">
+      <div style="font-size:10px;color:${isToday?'var(--accent)':'var(--muted)'};font-weight:700;text-transform:uppercase;letter-spacing:0.3px;">${dow}</div>
+      <div style="font-size:9px;color:var(--faint);">${dnum}</div>
+    </div>`;
+  }).join('');
 
   const cards = allGrades.flatMap(grade => branches.map(bn => {
     const mat      = (settings.branchMaterial || {})[bn] || {};
     const blockM3  = parseFloat(mat.blockM3)  || 0;
     const wasteFac = 1 - ((parseFloat(mat.wastePct)||0)/100);
     const stock    = calcBlockStock(bn, grade);
-    let runningBal = stock ? stock.current : 0;
+    const currentStock = stock ? stock.current : 0;
 
-    const weekRows = weeks2.map(wk => {
-      let cubic = 0;
-      schedule.filter(j =>
-        (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4) &&
-        wk.workDays.includes(parseDate(j.startdate))
-      ).forEach(j => {
-        const m = mMap[Number(j.machineno)];
-        if (!m || Number(m.branchno) !== bn) return;
-        const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
-        const st = stMap[sl.stockcode];
-        if (!st || (st.x_grade||'').trim() !== grade || !parseFloat(st.x_cubic)) return;
-        const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
-        cubic += parseFloat(st.x_cubic) * Math.max(0, lq);
-      });
-      const dailyReqBlocks = (blockM3>0 && wasteFac>0 && cubic>0)
-        ? Math.ceil(cubic/(blockM3*wasteFac)) : 0;
-
-      // Match Block Stock's formula exactly: end-of-week balance = currentStock
-      // + this week's forecast (today onward, via getForecastForWeek) - this
-      // week's FULL required total (once, not spread/prorated across days).
-      const weekForecast = getForecastForWeek(bn, grade, wk.workDays);
-      runningBal += weekForecast - dailyReqBlocks;
-
-      const days = wk.workDays.map(d => {
-        const isPast = d < today;
-        const actual = getActualProduction(bn, grade, d);
-        const fcastQty = actual !== null ? actual.qty : getTemplateQty(bn, grade, d);
-        return { d, fcastQty, isPast };
-      });
-
-      const weekTotalReq = dailyReqBlocks;
-      const weekTotalFcast = days.reduce((s,d)=>s+d.fcastQty,0);
-      const net = weekTotalFcast - weekTotalReq;
-
-      return { label: wk.label, days, required: weekTotalReq, forecast: weekTotalFcast, net, endBalance: runningBal };
+    // Per-day required, from actual scheduled jobs on that specific day (not
+    // spread evenly across a week) — same proportional-by-day approach used
+    // on the Block Stock page, so this matches that page's daily figures.
+    let weekCubic = 0;
+    const cubicByDay = {};
+    rollingDays.forEach(d => { cubicByDay[d] = 0; });
+    schedule.filter(j =>
+      (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4) &&
+      rollingDays.includes(parseDate(j.startdate))
+    ).forEach(j => {
+      const m = mMap[Number(j.machineno)];
+      if (!m || Number(m.branchno) !== bn) return;
+      const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
+      const st = stMap[sl.stockcode];
+      if (!st || (st.x_grade||'').trim() !== grade || !parseFloat(st.x_cubic)) return;
+      const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
+      const jobCubic = parseFloat(st.x_cubic) * Math.max(0, lq);
+      weekCubic += jobCubic;
+      const dStr = parseDate(j.startdate);
+      if (cubicByDay[dStr] !== undefined) cubicByDay[dStr] += jobCubic;
     });
+    const totalRequired = (blockM3>0 && wasteFac>0 && weekCubic>0) ? Math.ceil(weekCubic/(blockM3*wasteFac)) : 0;
 
-    const grandTotalReq = weekRows.reduce((s,w)=>s+w.required,0);
-    if (grandTotalReq === 0 && weekRows.every(w=>w.forecast===0)) return '';
+    if (totalRequired === 0) {
+      // Still show the card if there's tracked stock (consistent with Block
+      // Stock page visibility rule) but skip entirely if nothing to track
+      const anyFcast = rollingDays.some(d => {
+        const a = getActualProduction(bn, grade, d);
+        return (a !== null ? a.qty : getTemplateQty(bn, grade, d)) > 0;
+      });
+      if (!stock && !anyFcast) return '';
+    }
 
-    // Forecast production = big number, net stock balance shown below each day
-    const weekBlocks = weekRows.map(wk => {
-      const dayCells = wk.days.map(({d, fcastQty, isPast}) => {
-        const isToday = d === today;
-        const dow     = DOW_LABELS[(new Date(d+'T00:00:00').getDay()+6)%7];
-        return `<div style="flex:1;text-align:center;opacity:${isPast?'0.4':'1'};">
-          <div style="font-size:10px;color:${isToday?'var(--accent)':'var(--muted)'};font-weight:700;text-transform:uppercase;letter-spacing:0.3px;margin-bottom:3px;">${dow}</div>
-          <div style="font-family:var(--mono);font-size:17px;font-weight:700;color:${isToday?'var(--accent)':'var(--text)'};line-height:1;">${fcastQty}</div>
-        </div>`;
-      }).join('');
-      const balCol = wk.endBalance >= 0 ? 'var(--green)' : 'var(--red)';
-      return `
-        <div style="flex:1;">
-          <div style="font-size:9px;color:var(--muted);margin-bottom:3px;display:flex;justify-content:space-between;align-items:center;padding:0 3px;">
-            <span>${wk.label}</span>
-            <span style="font-family:var(--mono);font-weight:700;color:${balCol};font-size:13px;">${wk.endBalance>=0?'+':''}${Math.round(wk.endBalance)} end bal</span>
-          </div>
-          <div style="display:flex;gap:3px;">${dayCells}</div>
-        </div>`;
-    }).join('<div style="width:1px;background:var(--border);margin:0 12px;"></div>');
+    // Single running balance across the whole 5-day window — starts at
+    // current stock, then walks every day in the window. currentStock already
+    // includes everything PRODUCED up to and including today (via
+    // calcBlockStock's own day-by-day walk), so today's production must not
+    // be re-added. But currentStock does NOT subtract outstanding requirement
+    // (calcBlockStock only deducts COMPLETED jobs, not planned/outstanding
+    // ones) — so today's requirement still needs to come off the balance here,
+    // same as every future day's requirement does.
+    let runningBal = currentStock;
+    const dayCells = rollingDays.map(d => {
+      const isToday  = d === today;
+      const isFuture = d > today;
+      const actual   = getActualProduction(bn, grade, d);
+      const fcastQty = actual !== null ? actual.qty : getTemplateQty(bn, grade, d);
+      const dayReqShare = weekCubic > 0 ? totalRequired * (cubicByDay[d] / weekCubic) : 0;
+      if (isFuture) runningBal += fcastQty;   // production: only future days, today's is already in currentStock
+      runningBal -= dayReqShare;              // requirement: every day in the window, including today
+      return `<div style="flex:1;text-align:center;">
+        <div style="font-family:var(--mono);font-size:22px;font-weight:700;color:${isToday?'var(--accent)':'var(--text)'};line-height:1;">${fcastQty}</div>
+      </div>`;
+    }).join('');
+
+    const balCol = runningBal >= 0 ? 'var(--green)' : 'var(--red)';
 
     return `
-      <div style="display:flex;align-items:stretch;gap:14px;padding:7px 16px;background:var(--card);border:1px solid var(--border);border-radius:7px;margin-bottom:5px;">
+      <div style="display:flex;align-items:center;gap:12px;padding:5px 14px;background:var(--card);border:1px solid var(--border);border-radius:6px;margin-bottom:3px;">
         <div style="min-width:120px;display:flex;flex-direction:column;justify-content:center;">
           <span style="font-size:16px;font-weight:700;">${displayGrade(grade)}</span>
           <span style="font-size:11px;color:var(--muted);">${branchName(bn)}</span>
         </div>
-        <div style="display:flex;align-items:stretch;flex:1;">
-          ${weekBlocks}
+        <div style="display:flex;flex:1;">${dayCells}</div>
+        <div style="min-width:90px;text-align:right;">
+          <div style="font-size:9px;color:var(--faint);text-transform:uppercase;letter-spacing:0.3px;">Running total</div>
+          <div style="font-family:var(--mono);font-size:24px;font-weight:700;color:${balCol};">${runningBal>=0?'+':''}${Math.round(runningBal)}</div>
         </div>
       </div>`;
   })).filter(c => c !== '');
 
-  el.innerHTML = cards.join('') || '<div class="mat-no-data">No production scheduled for the next 2 weeks.</div>';
+  if (!cards.length) {
+    el.innerHTML = '<div class="mat-no-data">No production scheduled for the next 5 days.</div>';
+    return;
+  }
+
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;gap:14px;padding:0 16px 4px;">
+      <div style="min-width:120px;"></div>
+      <div style="display:flex;flex:1;">${headerCells}</div>
+      <div style="min-width:90px;"></div>
+    </div>
+    ${cards.join('')}`;
 }
 
 // ── Machine capacity tiles — this week ──
@@ -2313,17 +2337,22 @@ function renderDashCapacityTiles(branches) {
   const visibleMachines = machines.filter(m =>
     m.seqno !== 10000 && isMachineEnabled(m) && isActive(m) && branches.includes(Number(m.branchno))
   );
-  console.log('[dashboard] visibleMachines:', visibleMachines.length, 'of', machines.length, 'total');
   if (!visibleMachines.length) {
     el.innerHTML = '<div class="mat-no-data">No machines to show.</div>';
     return;
   }
 
-  const weekDates = getWeekDates(0).slice(0, settings.workDays);
+  const today = todayLocal();
+  const todayDate = [new Date()]; // single-day array for getCapacity/getHoursForMachineInDates
 
   el.innerHTML = visibleMachines.map(m => {
-    const cap = getCapacity(m, weekDates, 0);
-    const hrs = getHoursForMachineInDates(m.seqno, weekDates);
+    const cap = getCapacity(m, todayDate, 0); // today's available hours (daily_hours x 1)
+    const hrs = getHoursForMachineInDates(m.seqno, todayDate); // today's scheduled hours
+    const jobsToday = schedule.filter(j =>
+      Number(j.machineno) === Number(m.seqno) &&
+      parseDate(j.startdate) === today &&
+      (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4)
+    ).length;
     const pct = cap > 0 ? (hrs / cap) * 100 : 0;
     const active = isActive(m);
     const cls = active ? getColor(pct, settings.threshWarn, settings.threshOver) : 'idle';
@@ -2342,9 +2371,9 @@ function renderDashCapacityTiles(branches) {
           <div class="mc-bar ${cls}" style="width:${barW}%"></div>
         </div>
         <div class="mc-stats">
-          <span>Scheduled <span class="val">${hrs.toFixed(1)}h</span></span>
-          <span>Remaining cap <span class="val">${cap.toFixed(1)}h</span></span>
-          <span>Daily <span class="val">${m.daily_hours}h</span></span>
+          <span>Today's jobs <span class="val">${jobsToday}</span></span>
+          <span>Hours <span class="val">${hrs.toFixed(1)}h</span></span>
+          <span>Daily cap <span class="val">${cap.toFixed(1)}h</span></span>
         </div>
       </div>`;
   }).join('');
@@ -3312,7 +3341,7 @@ async function saveModal() {
     if (dt <= todayLocal()) {
       const priorStock = calcBlockStock(bn, grade);
       if (priorStock) {
-        const variance = Math.round(priorStock.current) - qty;
+        const variance = qty - Math.round(priorStock.current);
         if (variance !== 0) {
           varianceNote = ` (variance ${variance > 0 ? '+' : ''}${variance} vs system: was ${Math.round(priorStock.current)})`;
         }
