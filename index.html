@@ -298,6 +298,9 @@
     background: var(--surface);
     border-radius: 16px 16px 0 0;
     width: 100%;
+    max-height: 85vh;
+    max-height: 85dvh;
+    overflow-y: auto;
     padding: 20px 18px;
     padding-bottom: calc(20px + env(safe-area-inset-bottom));
   }
@@ -442,7 +445,7 @@
   </div>
 
   <div class="header">
-    <h1 id="page-title">Block <span>Stock</span></h1>
+    <h1 id="page-title">Block <span>Forecast</span></h1>
     <div class="branch-name" id="branch-name-display">Loading…</div>
   </div>
 
@@ -459,6 +462,15 @@
   <!-- ══ TODAY'S PRODUCTION PAGE ══ -->
   <div id="page-today" class="page-wrap" style="display:none;">
     <div class="content" id="today-content">
+      <div class="empty-state">
+        <div>Loading…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ STOCKTAKE PAGE ══ -->
+  <div id="page-stocktake" class="page-wrap" style="display:none;">
+    <div class="content" id="stocktake-content">
       <div class="empty-state">
         <div>Loading…</div>
       </div>
@@ -493,10 +505,13 @@
 
   <div class="bottom-nav">
     <div class="nav-btn active" id="nav-stock-btn" onclick="showPage('stock')">
-      <i class="ti ti-package"></i>Stock
+      <i class="ti ti-chart-line"></i>Forecast
     </div>
     <div class="nav-btn" id="nav-today-btn" onclick="showPage('today')">
       <i class="ti ti-calendar-event"></i>Production
+    </div>
+    <div class="nav-btn" id="nav-stocktake-btn" onclick="showPage('stocktake')">
+      <i class="ti ti-clipboard-list"></i>Stocktake
     </div>
     <div class="nav-btn" id="nav-settings-btn" onclick="showPage('settings')">
       <i class="ti ti-settings"></i>Settings
@@ -513,7 +528,8 @@
       </div>
       <div class="form-row">
         <div class="form-label">Quantity (blocks)</div>
-        <input type="number" class="form-input" id="mf-qty" min="0" placeholder="0">
+        <input type="number" class="form-input" id="mf-qty" min="0" placeholder="0" inputmode="numeric" enterkeyhint="done"
+          onkeydown="if(event.key==='Enter'){event.preventDefault();saveModal();}">
       </div>
       <div class="modal-actions">
         <button class="btn secondary" onclick="closeModal()">Cancel</button>
@@ -828,16 +844,20 @@ function renderGradeTabs() {
 }
 
 function showPage(page) {
-  document.getElementById('page-stock').style.display    = page === 'stock' ? 'flex' : 'none';
-  document.getElementById('page-today').style.display    = page === 'today' ? 'flex' : 'none';
-  document.getElementById('page-settings').style.display = page === 'settings' ? 'flex' : 'none';
+  document.getElementById('page-stock').style.display     = page === 'stock' ? 'flex' : 'none';
+  document.getElementById('page-today').style.display     = page === 'today' ? 'flex' : 'none';
+  document.getElementById('page-stocktake').style.display  = page === 'stocktake' ? 'flex' : 'none';
+  document.getElementById('page-settings').style.display  = page === 'settings' ? 'flex' : 'none';
   document.getElementById('nav-stock-btn').classList.toggle('active', page === 'stock');
   document.getElementById('nav-today-btn').classList.toggle('active', page === 'today');
+  document.getElementById('nav-stocktake-btn').classList.toggle('active', page === 'stocktake');
   document.getElementById('nav-settings-btn').classList.toggle('active', page === 'settings');
-  document.getElementById('page-title').innerHTML = page === 'stock' ? 'Block <span>Stock</span>'
+  document.getElementById('page-title').innerHTML = page === 'stock' ? 'Block <span>Forecast</span>'
     : page === 'today' ? '<span>Production</span>'
+    : page === 'stocktake' ? '<span>Stocktake</span>'
     : '<span>Settings</span>';
   if (page === 'today') renderTodayPage();
+  if (page === 'stocktake') renderStocktakePage();
   if (page === 'settings') renderSettingsPage();
 }
 
@@ -1070,6 +1090,70 @@ async function saveTodayProduction(grade, dateStr, qty) {
   renderTodayPage();
 }
 
+// ══════════════════════════════════════════════
+// STOCKTAKE PAGE — today only, one input per grade, blank by default since
+// a stocktake is a fresh physical count, not an edit of an existing value
+// ══════════════════════════════════════════════
+function renderStocktakePage() {
+  const el = document.getElementById('stocktake-content');
+  const bn = settings.branchNo;
+  const today = todayLocal();
+
+  const allGradesRaw = [...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))].sort();
+  const excluded = new Set(settings.excludedGrades || []);
+  const grades = allGradesRaw.filter(g => {
+    if (excluded.has(g)) return false;
+    const hasStock = calcBlockStock(bn, g) !== null;
+    return hasStock || gradeHasRequirement(bn, g);
+  });
+
+  if (!grades.length) {
+    el.innerHTML = `<div class="empty-state"><i class="ti ti-clipboard-list"></i><div>No grades to show</div></div>`;
+    return;
+  }
+
+  const rows = grades.map(g => {
+    const stock = calcBlockStock(bn, g);
+    const systemQty = stock ? Math.round(stock.current) : null;
+    return `
+      <div class="today-row">
+        <div style="flex:1;">
+          <div class="grade-name">${displayGrade(g)}</div>
+          <div class="grade-sub">${systemQty != null ? `System: ${systemQty}` : 'No stock tracked yet'}</div>
+        </div>
+        <input type="number" min="0" inputmode="numeric" enterkeyhint="done" class="today-input" style="flex:0 0 80px;" placeholder="Count"
+          onfocus="this.select()"
+          onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}"
+          onchange="saveStocktakeFromPage('${g}', this.value, this)">
+      </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div style="font-size:12px;color:var(--muted);margin-bottom:6px;">${new Date().toLocaleDateString('en-NZ', { weekday: 'long', day: 'numeric', month: 'long' })} — ${branchName(bn)}</div>
+    ${rows}
+    <div style="font-size:11px;color:var(--faint);margin-top:10px;text-align:center;">
+      Enter a physical count to set today's stock. This replaces all earlier entries for that grade.
+    </div>`;
+}
+
+async function saveStocktakeFromPage(grade, qty, inputEl) {
+  const bn = settings.branchNo;
+  const qtyInt = parseInt(qty);
+  if (isNaN(qtyInt) || qtyInt < 0) return;
+
+  inputEl.disabled = true;
+  const ok = await saveStocktakeEntry(bn, grade, todayLocal(), qtyInt);
+  inputEl.disabled = false;
+
+  if (ok) {
+    showToast('Stocktake saved');
+    await loadAllData();
+    renderStocktakePage();
+  } else {
+    showToast('Save failed — check connection');
+  }
+}
+
 async function saveDayForecast(grade, dateStr, qty, isFuture) {
   const bn = settings.branchNo;
   const qtyInt = parseInt(qty) || 0;
@@ -1098,9 +1182,40 @@ function openModal(mode) {
   document.getElementById('mf-date').value = todayLocal();
   document.getElementById('mf-qty').value = '';
   document.getElementById('modal-overlay').classList.add('show');
+  // Auto-focus the quantity field — date is already pre-filled to today, so
+  // this is almost always the only field someone needs to type into. Small
+  // delay so the input is actually laid out/visible before focusing.
+  setTimeout(() => document.getElementById('mf-qty').focus(), 80);
 }
 function closeModal() {
   document.getElementById('modal-overlay').classList.remove('show');
+}
+
+// Shared stocktake-save logic — same reset behaviour as desktop: variance
+// note, then clear entries up to and including the stocktake date (superseded
+// by the physical count), keeping anything entered for days AFTER it.
+// Used by both the opening-stock modal and the Stocktake page.
+async function saveStocktakeEntry(bn, grade, dt, qty) {
+  let varianceNote = '';
+  if (dt <= todayLocal()) {
+    const priorStock = calcBlockStock(bn, grade);
+    if (priorStock) {
+      const variance = Math.round(priorStock.current) - qty;
+      if (variance !== 0) varianceNote = ` (variance ${variance > 0 ? '+' : ''}${variance} vs system: was ${Math.round(priorStock.current)})`;
+    }
+  }
+  const ok = await sbInsert('block_stock_entries', { branch_no: bn, grade, entry_date: dt, qty, notes: 'Opening count' + varianceNote });
+  if (ok && dt <= todayLocal()) {
+    const prodToDelete = blockProduction.filter(p => Number(p.branch_no)===bn && p.grade===grade && p.production_date<=dt);
+    const adjToDelete  = blockAdjustments.filter(a => Number(a.branch_no)===bn && a.grade===grade && a.adjustment_date<=dt);
+    await Promise.all([
+      ...prodToDelete.map(r => sbDelete('block_production', r.id)),
+      ...adjToDelete.map(r => sbDelete('block_adjustments', r.id)),
+    ]);
+    const oldEntries = blockStockEntries.filter(e => Number(e.branch_no)===bn && e.grade===grade && e.entry_date < dt);
+    await Promise.all(oldEntries.map(e => sbDelete('block_stock_entries', e.id)));
+  }
+  return ok;
 }
 
 async function saveModal() {
@@ -1115,28 +1230,7 @@ async function saveModal() {
 
   let ok = false;
   if (modalMode === 'opening') {
-    // Same stocktake-reset behaviour as desktop: variance note, then clear
-    // entries up to and including the stocktake date (superseded by the
-    // physical count), keeping anything entered for days AFTER it.
-    let varianceNote = '';
-    if (dt <= todayLocal()) {
-      const priorStock = calcBlockStock(bn, grade);
-      if (priorStock) {
-        const variance = Math.round(priorStock.current) - qty;
-        if (variance !== 0) varianceNote = ` (variance ${variance > 0 ? '+' : ''}${variance} vs system: was ${Math.round(priorStock.current)})`;
-      }
-    }
-    ok = await sbInsert('block_stock_entries', { branch_no: bn, grade, entry_date: dt, qty, notes: 'Opening count' + varianceNote });
-    if (ok && dt <= todayLocal()) {
-      const prodToDelete = blockProduction.filter(p => Number(p.branch_no)===bn && p.grade===grade && p.production_date<=dt);
-      const adjToDelete  = blockAdjustments.filter(a => Number(a.branch_no)===bn && a.grade===grade && a.adjustment_date<=dt);
-      await Promise.all([
-        ...prodToDelete.map(r => sbDelete('block_production', r.id)),
-        ...adjToDelete.map(r => sbDelete('block_adjustments', r.id)),
-      ]);
-      const oldEntries = blockStockEntries.filter(e => Number(e.branch_no)===bn && e.grade===grade && e.entry_date < dt);
-      await Promise.all(oldEntries.map(e => sbDelete('block_stock_entries', e.id)));
-    }
+    ok = await saveStocktakeEntry(bn, grade, dt, qty);
   } else if (modalMode === 'production') {
     const isFuture = dt > todayLocal();
     ok = await sbInsert('block_production', { branch_no: bn, grade, production_date: dt, qty, notes: isFuture ? 'Forecast override' : 'Actual production' });
@@ -1223,8 +1317,10 @@ async function init() {
   const ok = await loadAllData();
   if (ok) {
     renderGradeTabs();
-    const onTodayPage = document.getElementById('page-today').style.display !== 'none';
+    const onTodayPage     = document.getElementById('page-today').style.display !== 'none';
+    const onStocktakePage = document.getElementById('page-stocktake').style.display !== 'none';
     if (onTodayPage) renderTodayPage();
+    else if (onStocktakePage) renderStocktakePage();
     else renderContent();
   }
   hideSplash();
