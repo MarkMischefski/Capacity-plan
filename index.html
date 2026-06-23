@@ -1313,7 +1313,9 @@ async function saveDayForecast(grade, dateStr, qty, isFuture) {
   );
   if (existing) await sbDelete('block_production', existing.id);
 
-  if (qtyInt >= 0 && (!isFuture || qtyInt > 0)) {
+  // A future override of 0 is deliberate ("definitely zero") and must still
+  // be saved as a real row, otherwise it falls back to the template on reload.
+  if (qtyInt >= 0) {
     await sbInsert('block_production', { branch_no: Number(bn), grade, production_date: dateStr, qty: qtyInt, notes: noteStr });
   }
   showToast('Saved');
@@ -1331,7 +1333,9 @@ async function saveUnitDayForecast(productName, dateStr, qty, isFuture) {
   );
   if (existing) await sbDelete('unit_production', existing.id);
 
-  if (qtyInt >= 0 && (!isFuture || qtyInt > 0)) {
+  // A future override of 0 is deliberate ("definitely zero") and must still
+  // be saved as a real row, otherwise it falls back to the template on reload.
+  if (qtyInt >= 0) {
     await sbInsert('unit_production', { branch_no: Number(bn), product_name: productName, production_date: dateStr, qty: qtyInt, notes: noteStr });
   }
   showToast('Saved');
