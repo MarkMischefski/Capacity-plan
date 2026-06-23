@@ -1182,6 +1182,7 @@
       <div class="save-bar">
         <button class="btn secondary" onclick="saveSettingsLocal()" title="Applies to this device only — does not change shared settings on other devices">Save (this device only)</button>
         <button class="btn" onclick="saveSettingsGlobal()" title="Pushes these settings to Supabase so every other device picks them up automatically">Save (all devices)</button>
+        <span id="local-override-indicator" style="font-size:11px;color:var(--amber);display:none;cursor:pointer;margin-left:8px;" onclick="if(confirm('Clear local overrides on this device and revert to shared settings?')) clearLocalOverrides();">⚠ This device has local overrides active — click to clear</span>
         <span class="save-msg" id="save-msg">✓ Settings saved</span>
       </div>
     </div>
@@ -1200,6 +1201,7 @@
 // STATE
 // ══════════════════════════════════════════════
 let settings = loadSettings();
+applyLocalOverrides();
 let sharedSettingsLoaded = false; // true once loadSharedSettingsFromSupabase() succeeds at least once this session
 let currentWeekOffset = 0;
 let globalBranch = 'all';   // shared branch filter across all pages
@@ -1250,6 +1252,10 @@ async function loadSharedSettingsFromSupabase() {
     // Merge shared settings on top of current (local supaUrl/supaKey are preserved
     // since 'shared' never contains them — see saveSettings)
     settings = { ...settings, ...shared };
+    // Re-apply any locally-saved overrides on top — otherwise a "this device
+    // only" save would just get silently wiped out the next time this runs
+    // (every page load, plus every auto-refresh interval tick).
+    applyLocalOverrides();
     sharedSettingsLoaded = true;
     return true;
   } catch (e) {
@@ -1326,18 +1332,40 @@ function collectSettingsFromForm() {
 }
 
 // LOCAL ONLY — saves supaUrl/supaKey to this device's localStorage (as
-// always) and applies everything else to the in-memory settings for THIS
-// session/device, but deliberately never touches Supabase. Useful for trying
-// out a change, or for a device that should diverge from the shared config.
+// always), AND saves every other field to a separate local-override object
+// in localStorage too, so it genuinely persists across reloads and survives
+// the shared-settings pull that happens on every load/refresh. Without this,
+// a "local only" save would just get silently overwritten the next time the
+// app reconnects — which defeats the point of a dedicated local save button.
 async function saveSettingsLocal() {
   collectSettingsFromForm();
   localStorage.setItem('expol_capacity_settings', JSON.stringify({ supaUrl: settings.supaUrl, supaKey: settings.supaKey }));
 
+  const { supaUrl, supaKey, ...localOverrides } = settings;
+  localStorage.setItem('expol_capacity_local_overrides', JSON.stringify(localOverrides));
+
   document.getElementById('save-msg').classList.add('show');
-  document.getElementById('save-msg').textContent = '✓ Saved on this device only — not shared';
+  document.getElementById('save-msg').textContent = '✓ Saved on this device only — not shared, persists across reloads';
   setTimeout(() => document.getElementById('save-msg').classList.remove('show'), 2500);
   refreshBranchFilters();
   renderMachineCapacityPage();
+}
+
+// Re-applies any saved local overrides on top of whatever's currently in
+// `settings` (called right after every shared-settings pull, so a local
+// override always wins over the shared value for fields it touched).
+function applyLocalOverrides() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('expol_capacity_local_overrides') || 'null');
+    if (saved) settings = { ...settings, ...saved };
+  } catch(e) {}
+}
+
+// Clears all local overrides for this device, reverting back to whatever
+// the shared settings table says. Does not affect supaUrl/supaKey.
+function clearLocalOverrides() {
+  localStorage.removeItem('expol_capacity_local_overrides');
+  alert('Local overrides cleared. Reload the page to pick up shared settings again.');
 }
 
 // GLOBAL — same as local, but also pushes everything (except supaUrl/supaKey,
@@ -3710,9 +3738,13 @@ async function saveUnitDayForecast(bn, productName, dateStr, qty, isFuture) {
     p => Number(p.branch_no) === Number(bn) && p.product_name === productName && p.production_date === dateStr
   );
   if (existing) await bsDelete('unit_production', existing.id);
-  if (qtyInt >= 0 && (!isFuture || qtyInt > 0)) {
+  // A future override of 0 is a deliberate choice ("definitely zero that day")
+  // and must still be saved as a real row — otherwise the day silently falls
+  // back to the weekly template on reload instead of staying at zero.
+  if (qtyInt >= 0) {
     await bsInsert('unit_production', { branch_no: Number(bn), product_name: productName, production_date: dateStr, qty: qtyInt, notes: noteStr });
   }
+  await loadUnitProductsData();
   await renderUnitProducts(true);
 }
 
@@ -3924,8 +3956,10 @@ async function saveDayForecast(bn, grade, dateStr, qty, isFuture) {
   );
   if (existing) await bsDelete('block_production', existing.id);
 
-  // Only insert if qty > 0 (or it's today/past and 0 means record it)
-  if (qtyInt >= 0 && (!isFuture || qtyInt > 0)) {
+  // A future override of 0 is a deliberate choice ("definitely zero that
+  // day") and must still be saved as a real row — otherwise it silently
+  // falls back to the weekly template on reload instead of staying at zero.
+  if (qtyInt >= 0) {
     await bsInsert('block_production', {
       branch_no: Number(bn), grade, production_date: dateStr, qty: qtyInt, notes: noteStr
     });
@@ -4292,6 +4326,15 @@ function _gradeOptions(selected) {
 // ══════════════════════════════════════════════
 function renderSettings() {
   const branches = getBranches();
+
+  // Show a warning if this device has local-only overrides active, since
+  // they silently take priority over shared settings for whichever fields
+  // they cover — easy to forget about otherwise.
+  const overrideIndicator = document.getElementById('local-override-indicator');
+  if (overrideIndicator) {
+    const hasOverrides = !!localStorage.getItem('expol_capacity_local_overrides');
+    overrideIndicator.style.display = hasOverrides ? 'inline' : 'none';
+  }
 
   // Branch names
   document.getElementById('branch-name-inputs').innerHTML = branches.map(b => `
