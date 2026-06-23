@@ -583,7 +583,13 @@ let blockProductionTemplate = [];
 let schedule = [];
 let salesLines = [];
 let machines = [];
-let activeGrade = null;
+let activeItem = null; // { type: 'grade'|'unit', key: gradeCode-or-productName }
+
+// Unit products (pods etc) — parallel state to the block tables above
+let unitStockEntries = [];
+let unitProduction = [];
+let unitAdjustments = [];
+let unitProductionTemplate = [];
 
 // ══════════════════════════════════════════════
 // DATE HELPERS (ported from desktop app)
@@ -656,7 +662,7 @@ async function sbDelete(table, id) {
 async function loadAllData() {
   setStatus('Loading…');
   try {
-    const [si, bse, bp, ba, bpt, sch, sl, mc, sharedSettings] = await Promise.all([
+    const [si, bse, bp, ba, bpt, sch, sl, mc, sharedSettings, use, up, ua, upt] = await Promise.all([
       sbFetch('capacity_stock_items'),
       sbFetch('block_stock_entries'),
       sbFetch('block_production'),
@@ -666,10 +672,15 @@ async function loadAllData() {
       sbFetch('capacity_sales_lines'),
       sbFetch('capacity_machines'),
       sbFetch('capacity_app_settings', '&id=eq.1'),
+      sbFetch('unit_stock_entries'),
+      sbFetch('unit_production'),
+      sbFetch('unit_adjustments'),
+      sbFetch('unit_production_template'),
     ]);
     stockItems = si; blockStockEntries = bse; blockProduction = bp;
     blockAdjustments = ba; blockProductionTemplate = bpt;
     schedule = sch; salesLines = sl; machines = mc;
+    unitStockEntries = use; unitProduction = up; unitAdjustments = ua; unitProductionTemplate = upt;
 
     if (sharedSettings && sharedSettings.length) {
       const shared = sharedSettings[0].settings || {};
@@ -677,6 +688,7 @@ async function loadAllData() {
       settings.excludedGrades = shared.excludedGrades || [];
       settings.gradeNames     = shared.gradeNames      || {};
       settings.branchMaterial = shared.branchMaterial  || {};
+      settings.unitProducts   = shared.unitProducts    || [];
     }
     setStatus(`Connected — updated ${new Date().toLocaleTimeString('en-NZ', {hour:'2-digit', minute:'2-digit'})}`, 'connected');
     return true;
@@ -727,6 +739,16 @@ function getForecastForWeek(bn, grade, workDayDates) {
     if (d <= today) return sum;
     const actual = getActualProduction(bn, grade, d);
     const qty = actual !== null ? actual.qty : getTemplateQty(bn, grade, d);
+    return sum + qty;
+  }, 0);
+}
+
+function getUnitForecastForWeek(bn, productName, workDayDates) {
+  const today = todayLocal();
+  return workDayDates.reduce((sum, d) => {
+    if (d <= today) return sum;
+    const actual = getUnitActualProduction(bn, productName, d);
+    const qty = actual !== null ? actual.qty : getUnitTemplateQty(bn, productName, d);
     return sum + qty;
   }, 0);
 }
@@ -819,27 +841,136 @@ function calcBlockStock(branchNo, grade) {
 }
 
 // ══════════════════════════════════════════════
+// UNIT PRODUCTS (pods etc) — same mechanism as blocks but tracked by simple
+// unit count, matched via LINKED_STOCKCODE instead of x_grade. No cubic
+// conversion: 1 sales-line unit = 1 unit of stock.
+// ══════════════════════════════════════════════
+function getUnitProductCodes(productName) {
+  const p = (settings.unitProducts || []).find(p => p.name === productName);
+  return p ? (p.codes || []) : [];
+}
+
+function getUnitTemplateQty(bn, productName, dateStr) {
+  const d   = new Date(dateStr + 'T00:00:00');
+  const dow = (d.getDay() + 6) % 7;
+  const t   = unitProductionTemplate.find(
+    t => Number(t.branch_no) === Number(bn) && t.product_name === productName && t.day_of_week === dow
+  );
+  return t ? (t.qty || 0) : 0;
+}
+
+function getUnitActualProduction(bn, productName, dateStr) {
+  const entry = unitProduction.find(
+    p => Number(p.branch_no) === Number(bn) && p.product_name === productName && p.production_date === dateStr
+  );
+  return entry ? { qty: entry.qty, actual: true } : null;
+}
+
+function unitProductHasRequirement(bn, productName) {
+  const codes = getUnitProductCodes(productName);
+  if (!codes.length) return false;
+  const slMap = Object.fromEntries(salesLines.map(l => [Number(l.solineid), l]));
+  const mMap  = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
+  const fourWeekDays = [];
+  for (let i = 0; i < 4; i++) {
+    getWeekDates(i).slice(0, 5).forEach(d => fourWeekDays.push(fmtDateLocal(d)));
+  }
+  let units = 0;
+  schedule.filter(j =>
+    (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4) &&
+    fourWeekDays.includes(j.startdate)
+  ).forEach(j => {
+    const m = mMap[Number(j.machineno)];
+    if (!m || Number(m.branchno) !== bn) return;
+    const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
+    if (!codes.includes((sl.linked_stockcode||'').trim())) return;
+    const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
+    units += Math.max(0, lq);
+  });
+  return units > 0;
+}
+
+function calcUnitStock(branchNo, productName) {
+  const bn = Number(branchNo);
+  const codes = getUnitProductCodes(productName);
+  if (!codes.length) return null;
+
+  const entries = unitStockEntries
+    .filter(e => Number(e.branch_no) === bn && e.product_name === productName)
+    .sort((a, b) => b.entry_date.localeCompare(a.entry_date));
+  if (!entries.length) return null;
+
+  const base = entries[0];
+  const baseDate = base.entry_date;
+  const baseQty = base.qty;
+
+  const todayStr = todayLocal();
+  let produced = 0;
+  for (let d = new Date(baseDate + 'T00:00:00'); fmtDateLocal(d) <= todayStr; d.setDate(d.getDate() + 1)) {
+    const dow = (d.getDay() + 6) % 7;
+    if (dow > 4) continue;
+    const dateStr = fmtDateLocal(d);
+    const actual = getUnitActualProduction(bn, productName, dateStr);
+    produced += actual !== null ? actual.qty : getUnitTemplateQty(bn, productName, dateStr);
+  }
+
+  const adjustments = unitAdjustments
+    .filter(a => Number(a.branch_no) === bn && a.product_name === productName && a.adjustment_date >= baseDate)
+    .reduce((s, a) => s + (a.qty || 0), 0);
+
+  const slMap = Object.fromEntries(salesLines.map(l => [Number(l.solineid), l]));
+  const machineMap = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
+  let usedUnits = 0;
+  schedule
+    .filter(j => Number(j.iscomplete) === 1 && (j.completime || j.finishdate) >= baseDate)
+    .forEach(j => {
+      const m = machineMap[Number(j.machineno)];
+      if (!m || Number(m.branchno) !== bn) return;
+      const sl = slMap[Number(j.line_seqno)];
+      if (!sl || !codes.includes((sl.linked_stockcode||'').trim())) return;
+      const lineQty = (parseFloat(sl.ord_quant) || 0) - (parseFloat(sl.bkord_quant) || 0) - (parseFloat(sl.sup_quant) || 0);
+      usedUnits += Math.max(0, lineQty);
+    });
+
+  const current = baseQty + produced + adjustments - usedUnits;
+  return { baseQty, baseDate, produced, adjustments, usedBlocks: usedUnits, current };
+}
+
+// ══════════════════════════════════════════════
 // RENDER
 // ══════════════════════════════════════════════
-function renderGradeTabs() {
+// Shared helper: returns the unified list of visible grades + unit products
+// for a branch, applying the same "tracked stock OR current requirement"
+// visibility rule used everywhere. { type, key, label } per item.
+function getVisibleItems(bn) {
   const allGradesRaw = [...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))].sort();
   const excluded = new Set(settings.excludedGrades || []);
-  const bn = settings.branchNo;
-
-  // Same visibility rule as desktop: show a grade only if it has tracked stock
-  // (an opening count entered) OR an outstanding job requirement in the next
-  // 4 weeks. Hides grades that are neither stocked nor currently needed.
   const grades = allGradesRaw.filter(g => {
     if (excluded.has(g)) return false;
     const hasStock = calcBlockStock(bn, g) !== null;
     return hasStock || gradeHasRequirement(bn, g);
   });
+  const unitProducts = (settings.unitProducts || []).filter(p => p.name && p.codes && p.codes.length).filter(p => {
+    const hasStock = calcUnitStock(bn, p.name) !== null;
+    return hasStock || unitProductHasRequirement(bn, p.name);
+  });
+  return [
+    ...grades.map(g => ({ type: 'grade', key: g, label: displayGrade(g) })),
+    ...unitProducts.map(p => ({ type: 'unit', key: p.name, label: p.name })),
+  ];
+}
 
-  if (!activeGrade || !grades.includes(activeGrade)) activeGrade = grades[0] || null;
+function renderGradeTabs() {
+  const bn = settings.branchNo;
+  const items = getVisibleItems(bn);
+
+  if (!activeItem || !items.some(i => i.type === activeItem.type && i.key === activeItem.key)) {
+    activeItem = items[0] || null;
+  }
 
   const tabsEl = document.getElementById('grade-tabs');
-  tabsEl.innerHTML = grades.map(g => `
-    <div class="grade-tab ${g === activeGrade ? 'active' : ''}" onclick="selectGrade('${g}')">${displayGrade(g)}</div>
+  tabsEl.innerHTML = items.map(i => `
+    <div class="grade-tab ${activeItem && i.type === activeItem.type && i.key === activeItem.key ? 'active' : ''}" onclick="selectItem('${i.type}','${i.key}')">${i.label}</div>
   `).join('');
 }
 
@@ -896,8 +1027,8 @@ async function saveDeviceSettings() {
   showToast('Reconnected');
 }
 
-function selectGrade(g) {
-  activeGrade = g;
+function selectItem(type, key) {
+  activeItem = { type, key };
   renderGradeTabs();
   renderContent();
 }
@@ -908,13 +1039,15 @@ function renderContent() {
 
   document.getElementById('branch-name-display').textContent = branchName(bn);
 
-  if (!activeGrade) {
-    el.innerHTML = `<div class="empty-state"><i class="ti ti-package" style="font-size:36px;"></i><div>No grades available</div></div>`;
+  if (!activeItem) {
+    el.innerHTML = `<div class="empty-state"><i class="ti ti-package" style="font-size:36px;"></i><div>No grades or products available</div></div>`;
     return;
   }
 
-  const grade = activeGrade;
-  const stock = calcBlockStock(bn, grade);
+  const isUnit = activeItem.type === 'unit';
+  const key = activeItem.key; // grade code, or unit product name
+  const displayName = isUnit ? key : displayGrade(key);
+  const stock = isUnit ? calcUnitStock(bn, key) : calcBlockStock(bn, key);
   const currentStock = stock ? stock.current : 0;
 
   const weeks2 = Array.from({length: 2}, (_, i) => {
@@ -927,33 +1060,54 @@ function renderContent() {
   const currentWeekStart = weeks2[0].days[0];
 
   const weekBlocks = weeks2.map(wk => {
-    // Required (outstanding jobs this week, same logic as desktop)
-    const mat = (settings.branchMaterial || {})[bn] || {};
-    const blockM3 = parseFloat(mat.blockM3) || 0;
-    const wasteFac = 1 - ((parseFloat(mat.wastePct)||0)/100);
-    const stMap = Object.fromEntries(stockItems.map(s => [s.stockcode, s]));
     const slMap = Object.fromEntries(salesLines.map(l => [Number(l.solineid), l]));
     const mMap  = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
 
-    let cubic = 0;
-    schedule.filter(j =>
-      (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4) &&
-      wk.days.includes(j.startdate)
-    ).forEach(j => {
-      const m = mMap[Number(j.machineno)];
-      if (!m || Number(m.branchno) !== bn) return;
-      const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
-      const st = stMap[sl.stockcode];
-      if (!st || (st.x_grade||'').trim() !== grade || !parseFloat(st.x_cubic)) return;
-      const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
-      cubic += parseFloat(st.x_cubic) * Math.max(0, lq);
-    });
-    const required = (blockM3>0 && wasteFac>0 && cubic>0) ? Math.ceil(cubic/(blockM3*wasteFac)) : 0;
-    const forecast = getForecastForWeek(bn, grade, wk.days);
+    let required = 0;
+    if (isUnit) {
+      // Unit products: direct unit count from outstanding sales lines matched
+      // via LINKED_STOCKCODE — no cubic/blockM3 conversion at all.
+      const codes = getUnitProductCodes(key);
+      let units = 0;
+      schedule.filter(j =>
+        (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4) &&
+        wk.days.includes(j.startdate)
+      ).forEach(j => {
+        const m = mMap[Number(j.machineno)];
+        if (!m || Number(m.branchno) !== bn) return;
+        const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
+        if (!codes.includes((sl.linked_stockcode||'').trim())) return;
+        const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
+        units += Math.max(0, lq);
+      });
+      required = Math.round(units);
+    } else {
+      // Grades: cubic-sum-then-round-once via blockM3/waste, same as desktop
+      const mat = (settings.branchMaterial || {})[bn] || {};
+      const blockM3 = parseFloat(mat.blockM3) || 0;
+      const wasteFac = 1 - ((parseFloat(mat.wastePct)||0)/100);
+      const stMap = Object.fromEntries(stockItems.map(s => [s.stockcode, s]));
+      let cubic = 0;
+      schedule.filter(j =>
+        (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4) &&
+        wk.days.includes(j.startdate)
+      ).forEach(j => {
+        const m = mMap[Number(j.machineno)];
+        if (!m || Number(m.branchno) !== bn) return;
+        const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
+        const st = stMap[sl.stockcode];
+        if (!st || (st.x_grade||'').trim() !== key || !parseFloat(st.x_cubic)) return;
+        const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
+        cubic += parseFloat(st.x_cubic) * Math.max(0, lq);
+      });
+      required = (blockM3>0 && wasteFac>0 && cubic>0) ? Math.ceil(cubic/(blockM3*wasteFac)) : 0;
+    }
+
+    const forecast = isUnit ? getUnitForecastForWeek(bn, key, wk.days) : getForecastForWeek(bn, key, wk.days);
 
     const dayCells = wk.days.map(d => {
-      const actual = getActualProduction(bn, grade, d);
-      const tmpl = getTemplateQty(bn, grade, d);
+      const actual = isUnit ? getUnitActualProduction(bn, key, d) : getActualProduction(bn, key, d);
+      const tmpl = isUnit ? getUnitTemplateQty(bn, key, d) : getTemplateQty(bn, key, d);
       const isPast = d < currentWeekStart;
       const isToday = d === today;
       const isFuture = d > today;
@@ -968,7 +1122,7 @@ function renderContent() {
           <input type="number" min="0" inputmode="numeric" class="day-input ${cls}" value="${qty}"
             ${isPast ? 'disabled' : ''}
             onfocus="this.select()"
-            onchange="saveDayForecast('${grade}','${d}',this.value,${isFuture})">
+            onchange="${isUnit ? `saveUnitDayForecast('${key}','${d}',this.value,${isFuture})` : `saveDayForecast('${key}','${d}',this.value,${isFuture})`}">
           <div class="day-sub">${subLabel}</div>
         </div>`;
     }).join('');
@@ -989,7 +1143,7 @@ function renderContent() {
     <div class="stock-card">
       <div class="stock-top">
         <div>
-          <div class="stock-label">Current stock — ${displayGrade(grade)}</div>
+          <div class="stock-label">Current stock — ${displayName}</div>
           <div class="stock-val" style="color:${stockCol}">${Math.round(currentStock)}</div>
         </div>
       </div>
@@ -1026,16 +1180,10 @@ function renderTodayPage() {
   const prevDays = getPrevWeekdays(2);
   const allDays = [...prevDays, today]; // oldest -> today, left to right
 
-  const allGradesRaw = [...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))].sort();
-  const excluded = new Set(settings.excludedGrades || []);
-  const grades = allGradesRaw.filter(g => {
-    if (excluded.has(g)) return false;
-    const hasStock = calcBlockStock(bn, g) !== null;
-    return hasStock || gradeHasRequirement(bn, g);
-  });
+  const items = getVisibleItems(bn);
 
-  if (!grades.length) {
-    el.innerHTML = `<div class="empty-state"><i class="ti ti-calendar-event"></i><div>No grades to show</div></div>`;
+  if (!items.length) {
+    el.innerHTML = `<div class="empty-state"><i class="ti ti-calendar-event"></i><div>No grades or products to show</div></div>`;
     return;
   }
 
@@ -1046,19 +1194,19 @@ function renderTodayPage() {
     return `<div class="prod-daycol-head ${isToday?'today':''}">${dow}<br>${dnum}</div>`;
   }).join('');
 
-  const rows = grades.map(g => {
+  const rows = items.map(item => {
+    const isUnit = item.type === 'unit';
     const dayCells = allDays.map(d => {
-      const isToday = d === today;
-      const actual = getActualProduction(bn, g, d);
-      const tmpl = getTemplateQty(bn, g, d);
+      const actual = isUnit ? getUnitActualProduction(bn, item.key, d) : getActualProduction(bn, item.key, d);
+      const tmpl = isUnit ? getUnitTemplateQty(bn, item.key, d) : getTemplateQty(bn, item.key, d);
       const qty = actual !== null ? actual.qty : tmpl;
       const cls = actual !== null ? 'actual' : '';
       return `<input type="number" min="0" inputmode="numeric" class="today-input ${cls}" value="${qty}"
-        onfocus="this.select()" onchange="saveTodayProduction('${g}','${d}', this.value)">`;
+        onfocus="this.select()" onchange="saveTodayProduction('${item.type}','${item.key}','${d}', this.value)">`;
     }).join('');
     return `
       <div class="today-row">
-        <div class="grade-name" style="flex:0 0 70px;">${displayGrade(g)}</div>
+        <div class="grade-name" style="flex:0 0 70px;">${item.label}</div>
         <div class="prod-day-inputs">${dayCells}</div>
       </div>`;
   }).join('');
@@ -1075,15 +1223,19 @@ function renderTodayPage() {
     </div>`;
 }
 
-async function saveTodayProduction(grade, dateStr, qty) {
+async function saveTodayProduction(itemType, key, dateStr, qty) {
   const bn = settings.branchNo;
   const qtyInt = parseInt(qty) || 0;
+  const isUnit = itemType === 'unit';
+  const table = isUnit ? 'unit_production' : 'block_production';
+  const keyField = isUnit ? 'product_name' : 'grade';
 
-  const existing = blockProduction.find(
-    p => Number(p.branch_no) === Number(bn) && p.grade === grade && p.production_date === dateStr
+  const list = isUnit ? unitProduction : blockProduction;
+  const existing = list.find(
+    p => Number(p.branch_no) === Number(bn) && p[keyField] === key && p.production_date === dateStr
   );
-  if (existing) await sbDelete('block_production', existing.id);
-  await sbInsert('block_production', { branch_no: Number(bn), grade, production_date: dateStr, qty: qtyInt, notes: 'Actual production' });
+  if (existing) await sbDelete(table, existing.id);
+  await sbInsert(table, { branch_no: Number(bn), [keyField]: key, production_date: dateStr, qty: qtyInt, notes: 'Actual production' });
 
   showToast('Saved');
   await loadAllData();
@@ -1097,34 +1249,28 @@ async function saveTodayProduction(grade, dateStr, qty) {
 function renderStocktakePage() {
   const el = document.getElementById('stocktake-content');
   const bn = settings.branchNo;
-  const today = todayLocal();
 
-  const allGradesRaw = [...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))].sort();
-  const excluded = new Set(settings.excludedGrades || []);
-  const grades = allGradesRaw.filter(g => {
-    if (excluded.has(g)) return false;
-    const hasStock = calcBlockStock(bn, g) !== null;
-    return hasStock || gradeHasRequirement(bn, g);
-  });
+  const items = getVisibleItems(bn);
 
-  if (!grades.length) {
-    el.innerHTML = `<div class="empty-state"><i class="ti ti-clipboard-list"></i><div>No grades to show</div></div>`;
+  if (!items.length) {
+    el.innerHTML = `<div class="empty-state"><i class="ti ti-clipboard-list"></i><div>No grades or products to show</div></div>`;
     return;
   }
 
-  const rows = grades.map(g => {
-    const stock = calcBlockStock(bn, g);
+  const rows = items.map(item => {
+    const isUnit = item.type === 'unit';
+    const stock = isUnit ? calcUnitStock(bn, item.key) : calcBlockStock(bn, item.key);
     const systemQty = stock ? Math.round(stock.current) : null;
     return `
       <div class="today-row">
         <div style="flex:1;">
-          <div class="grade-name">${displayGrade(g)}</div>
+          <div class="grade-name">${item.label}</div>
           <div class="grade-sub">${systemQty != null ? `System: ${systemQty}` : 'No stock tracked yet'}</div>
         </div>
         <input type="number" min="0" inputmode="numeric" enterkeyhint="done" class="today-input" style="flex:0 0 80px;" placeholder="Count"
           onfocus="this.select()"
           onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}"
-          onchange="saveStocktakeFromPage('${g}', this.value, this)">
+          onchange="saveStocktakeFromPage('${item.type}','${item.key}', this.value, this)">
       </div>`;
   }).join('');
 
@@ -1132,17 +1278,20 @@ function renderStocktakePage() {
     <div style="font-size:12px;color:var(--muted);margin-bottom:6px;">${new Date().toLocaleDateString('en-NZ', { weekday: 'long', day: 'numeric', month: 'long' })} — ${branchName(bn)}</div>
     ${rows}
     <div style="font-size:11px;color:var(--faint);margin-top:10px;text-align:center;">
-      Enter a physical count to set today's stock. This replaces all earlier entries for that grade.
+      Enter a physical count to set today's stock. This replaces all earlier entries for that grade/product.
     </div>`;
 }
 
-async function saveStocktakeFromPage(grade, qty, inputEl) {
+async function saveStocktakeFromPage(itemType, key, qty, inputEl) {
   const bn = settings.branchNo;
   const qtyInt = parseInt(qty);
   if (isNaN(qtyInt) || qtyInt < 0) return;
+  const isUnit = itemType === 'unit';
 
   inputEl.disabled = true;
-  const ok = await saveStocktakeEntry(bn, grade, todayLocal(), qtyInt);
+  const ok = isUnit
+    ? await saveUnitStocktakeEntry(bn, key, todayLocal(), qtyInt)
+    : await saveStocktakeEntry(bn, key, todayLocal(), qtyInt);
   inputEl.disabled = false;
 
   if (ok) {
@@ -1166,6 +1315,24 @@ async function saveDayForecast(grade, dateStr, qty, isFuture) {
 
   if (qtyInt >= 0 && (!isFuture || qtyInt > 0)) {
     await sbInsert('block_production', { branch_no: Number(bn), grade, production_date: dateStr, qty: qtyInt, notes: noteStr });
+  }
+  showToast('Saved');
+  await loadAllData();
+  renderContent();
+}
+
+async function saveUnitDayForecast(productName, dateStr, qty, isFuture) {
+  const bn = settings.branchNo;
+  const qtyInt = parseInt(qty) || 0;
+  const noteStr = isFuture ? 'Forecast override' : 'Actual production';
+
+  const existing = unitProduction.find(
+    p => Number(p.branch_no) === Number(bn) && p.product_name === productName && p.production_date === dateStr
+  );
+  if (existing) await sbDelete('unit_production', existing.id);
+
+  if (qtyInt >= 0 && (!isFuture || qtyInt > 0)) {
+    await sbInsert('unit_production', { branch_no: Number(bn), product_name: productName, production_date: dateStr, qty: qtyInt, notes: noteStr });
   }
   showToast('Saved');
   await loadAllData();
@@ -1218,9 +1385,34 @@ async function saveStocktakeEntry(bn, grade, dt, qty) {
   return ok;
 }
 
+// Same as saveStocktakeEntry but for unit products
+async function saveUnitStocktakeEntry(bn, productName, dt, qty) {
+  let varianceNote = '';
+  if (dt <= todayLocal()) {
+    const priorStock = calcUnitStock(bn, productName);
+    if (priorStock) {
+      const variance = qty - Math.round(priorStock.current);
+      if (variance !== 0) varianceNote = ` (variance ${variance > 0 ? '+' : ''}${variance} vs system: was ${Math.round(priorStock.current)})`;
+    }
+  }
+  const ok = await sbInsert('unit_stock_entries', { branch_no: bn, product_name: productName, entry_date: dt, qty, notes: 'Opening count' + varianceNote });
+  if (ok && dt <= todayLocal()) {
+    const prodToDelete = unitProduction.filter(p => Number(p.branch_no)===bn && p.product_name===productName && p.production_date<=dt);
+    const adjToDelete  = unitAdjustments.filter(a => Number(a.branch_no)===bn && a.product_name===productName && a.adjustment_date<=dt);
+    await Promise.all([
+      ...prodToDelete.map(r => sbDelete('unit_production', r.id)),
+      ...adjToDelete.map(r => sbDelete('unit_adjustments', r.id)),
+    ]);
+    const oldEntries = unitStockEntries.filter(e => Number(e.branch_no)===bn && e.product_name===productName && e.entry_date < dt);
+    await Promise.all(oldEntries.map(e => sbDelete('unit_stock_entries', e.id)));
+  }
+  return ok;
+}
+
 async function saveModal() {
   const bn = settings.branchNo;
-  const grade = activeGrade;
+  const isUnit = activeItem && activeItem.type === 'unit';
+  const key = activeItem ? activeItem.key : null;
   const dt = document.getElementById('mf-date').value;
   const qty = parseInt(document.getElementById('mf-qty').value);
   if (!dt || isNaN(qty)) { showToast('Enter a date and quantity'); return; }
@@ -1230,10 +1422,13 @@ async function saveModal() {
 
   let ok = false;
   if (modalMode === 'opening') {
-    ok = await saveStocktakeEntry(bn, grade, dt, qty);
+    ok = isUnit ? await saveUnitStocktakeEntry(bn, key, dt, qty) : await saveStocktakeEntry(bn, key, dt, qty);
   } else if (modalMode === 'production') {
     const isFuture = dt > todayLocal();
-    ok = await sbInsert('block_production', { branch_no: bn, grade, production_date: dt, qty, notes: isFuture ? 'Forecast override' : 'Actual production' });
+    const notes = isFuture ? 'Forecast override' : 'Actual production';
+    ok = isUnit
+      ? await sbInsert('unit_production', { branch_no: bn, product_name: key, production_date: dt, qty, notes })
+      : await sbInsert('block_production', { branch_no: bn, grade: key, production_date: dt, qty, notes });
   }
 
   btn.textContent = 'Save'; btn.disabled = false;
