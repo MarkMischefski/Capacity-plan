@@ -2796,12 +2796,21 @@ let unitProductionTemplate = [];
 
 // ── Supabase CRUD helpers ─────────────────────
 async function bsFetch(table) {
-  const res = await fetch(
-    `${settings.supaUrl}/rest/v1/${table}?select=*&order=created_at.desc`,
-    { headers: supaHeaders() }
-  );
-  if (!res.ok) { console.error(`${table} fetch failed`, res.status); return []; }
-  return res.json();
+  const pageSize = 1000;
+  let all = [];
+  let from = 0;
+  while (true) {
+    const res = await fetch(
+      `${settings.supaUrl}/rest/v1/${table}?select=*&order=created_at.desc`,
+      { headers: { ...supaHeaders(), "Range": `${from}-${from + pageSize - 1}`, "Range-Unit": "items" } }
+    );
+    if (!res.ok) { console.error(`${table} fetch failed`, res.status); break; }
+    const page = await res.json();
+    all = all.concat(page);
+    if (page.length < pageSize) break;
+    from += pageSize;
+  }
+  return all;
 }
 
 async function bsFetchTemplate() {
