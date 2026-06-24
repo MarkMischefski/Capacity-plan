@@ -600,6 +600,15 @@ function fmtDateLocal(d) {
 }
 function todayLocal() { return fmtDateLocal(new Date()); }
 
+// Pulls an overdue (still-outstanding) job's date forward onto the earliest
+// day of a window, so it's never silently dropped from requirement once its
+// own original week has passed. Jobs within/after the window keep their date.
+function effectiveJobDate(jobDateStr, sortedWindowDays) {
+  if (!sortedWindowDays.length) return jobDateStr;
+  const earliest = sortedWindowDays[0];
+  return jobDateStr < earliest ? earliest : jobDateStr;
+}
+
 function getWeekDates(offsetWeeks) {
   const now = new Date();
   const dow = (now.getDay() + 6) % 7; // Mon=0
@@ -773,7 +782,7 @@ function gradeHasRequirement(bn, grade) {
   let cubic = 0;
   schedule.filter(j =>
     (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4) &&
-    fourWeekDays.includes(j.startdate)
+    (fourWeekDays.includes(j.startdate) || j.startdate < fourWeekDays[0])
   ).forEach(j => {
     const m = mMap[Number(j.machineno)];
     if (!m || Number(m.branchno) !== bn) return;
@@ -878,7 +887,7 @@ function unitProductHasRequirement(bn, productName) {
   let units = 0;
   schedule.filter(j =>
     (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4) &&
-    fourWeekDays.includes(j.startdate)
+    (fourWeekDays.includes(j.startdate) || j.startdate < fourWeekDays[0])
   ).forEach(j => {
     const m = mMap[Number(j.machineno)];
     if (!m || Number(m.branchno) !== bn) return;
@@ -1053,7 +1062,7 @@ function renderContent() {
   const weeks2 = Array.from({length: 2}, (_, i) => {
     const days = getWeekDates(i).slice(0, 5).map(d => fmtDateLocal(d));
     const label = i === 0 ? 'This week' : 'Next week';
-    return { days, label };
+    return { days, label, offset: i };
   });
 
   const today = todayLocal();
@@ -1069,10 +1078,12 @@ function renderContent() {
       // via LINKED_STOCKCODE — no cubic/blockM3 conversion at all.
       const codes = getUnitProductCodes(key);
       let units = 0;
-      schedule.filter(j =>
-        (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4) &&
-        wk.days.includes(j.startdate)
-      ).forEach(j => {
+      const overdueWindow = wk.offset === 0 ? wk.days : null;
+      schedule.filter(j => {
+        if (Number(j.iscomplete) !== 0 && Number(j.iscomplete) !== 4) return false;
+        if (overdueWindow) return effectiveJobDate(j.startdate, overdueWindow) <= wk.days[wk.days.length-1];
+        return wk.days.includes(j.startdate);
+      }).forEach(j => {
         const m = mMap[Number(j.machineno)];
         if (!m || Number(m.branchno) !== bn) return;
         const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
@@ -1088,10 +1099,12 @@ function renderContent() {
       const wasteFac = 1 - ((parseFloat(mat.wastePct)||0)/100);
       const stMap = Object.fromEntries(stockItems.map(s => [s.stockcode, s]));
       let cubic = 0;
-      schedule.filter(j =>
-        (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4) &&
-        wk.days.includes(j.startdate)
-      ).forEach(j => {
+      const overdueWindow2 = wk.offset === 0 ? wk.days : null;
+      schedule.filter(j => {
+        if (Number(j.iscomplete) !== 0 && Number(j.iscomplete) !== 4) return false;
+        if (overdueWindow2) return effectiveJobDate(j.startdate, overdueWindow2) <= wk.days[wk.days.length-1];
+        return wk.days.includes(j.startdate);
+      }).forEach(j => {
         const m = mMap[Number(j.machineno)];
         if (!m || Number(m.branchno) !== bn) return;
         const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
