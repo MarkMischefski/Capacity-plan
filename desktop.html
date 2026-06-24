@@ -872,7 +872,7 @@
           <div class="subtitle">Upcoming production schedule across all machines</div>
         </div>
         <div class="controls">
-          <select id="branch-filter-j" onchange="setBranch(this.value)">
+          <select id="branch-filter-j" onchange="setBranch(this.value); refreshMachineFilterForBranch();">
             
           </select>
           <select id="machine-filter-j" onchange="renderJobs()">
@@ -885,6 +885,8 @@
             <option value="4">Partial</option>
             <option value="1">Complete</option>
           </select>
+          <input type="text" id="grade-search-j" placeholder="Search grade…" oninput="renderJobs()"
+                 style="background:var(--card);border:1px solid var(--border2);color:var(--text);padding:7px 12px;border-radius:6px;font-size:13px;min-width:140px;">
         </div>
       </div>
       <div class="content">
@@ -905,13 +907,14 @@
                   <th>Sched Qty</th>
                   <th>Made</th>
                   <th>Stockcode</th>
+                  <th>Linked Stockcode</th>
                   <th>Description</th>
                   <th>Grade</th>
                   <th>SO Ord Qty</th>
                   <th>SO Unsup Qty</th>
                   <th>x_cubic</th>
                   <th>m³</th>
-                  <th>line_seqno</th>
+                  <th>hdr_seqno</th>
                   <th>Status</th>
                 </tr>
               </thead>
@@ -1500,6 +1503,19 @@ function fmtShort(s) {
 
 function parseDate(s) { return s ? s.slice(0,10) : null; }
 
+// Outstanding (not-yet-completed) jobs whose scheduled startdate has already
+// passed must not silently disappear from requirement calculations once
+// their original week/window is over — they're still real, unfulfilled work.
+// This pulls any job dated BEFORE the earliest day in a given window forward
+// onto that earliest day, so overdue work always lands in "today's" (or
+// "this week's") requirement instead of vanishing. Jobs dated within or
+// after the window keep their real date.
+function effectiveJobDate(jobDateStr, sortedWindowDays) {
+  if (!sortedWindowDays.length) return jobDateStr;
+  const earliest = sortedWindowDays[0];
+  return jobDateStr < earliest ? earliest : jobDateStr;
+}
+
 function getColor(pct, threshWarn, threshOver) {
   if (pct === 0) return 'idle';
   if (pct >= threshOver) return 'over';
@@ -1642,7 +1658,7 @@ function setBranch(val) {
   });
   const activePage = document.querySelector('.page.active')?.id;
   if (activePage === 'page-utilisation') renderMachineCapacityPage();
-  if (activePage === 'page-jobs')       renderJobs();
+  if (activePage === 'page-jobs')       refreshMachineFilterForBranch();
   if (activePage === 'page-materials')  renderMaterials();
   if (activePage === 'page-blockstock') renderBlockStock();
   if (activePage === 'page-unitproducts') renderUnitProducts();
@@ -1663,16 +1679,8 @@ function refreshBranchFilters() {
     sel.value = globalBranch;
   });
 
-  // Machine filter for jobs
-  const msel = document.getElementById('machine-filter-j');
-  if (msel) {
-    const cur = msel.value;
-    msel.innerHTML = '<option value="all">All Machines</option>' +
-      machines.filter(m => isActive(m)).map(m =>
-        `<option value="${m.seqno}">${m.machine_name} (${branchName(m.branchno)})</option>`
-      ).join('');
-    msel.value = cur;
-  }
+  // Machine filter for jobs — scoped to the current branch, see refreshMachineFilterForBranch()
+  refreshMachineFilterForBranch();
 }
 
 // ══════════════════════════════════════════════
@@ -1871,6 +1879,7 @@ function renderJobs() {
   const branchFilter = globalBranch;
   const machineFilter = document.getElementById('machine-filter-j').value;
   const statusFilter  = document.getElementById('status-filter-j').value;
+  const gradeSearch   = (document.getElementById('grade-search-j')?.value || '').trim().toLowerCase();
   const today = new Date(); today.setHours(0,0,0,0);
 
   const machineMap = Object.fromEntries(machines.map(m => [m.seqno, m]));
@@ -1892,6 +1901,17 @@ function renderJobs() {
 
   const salesLineMap = Object.fromEntries(salesLines.map(l => [Number(l.solineid), l]));
   const stockMap     = Object.fromEntries(stockItems.map(s => [s.stockcode, s]));
+
+  // Grade search filter — applied after resolving each job's grade via its
+  // sales line, since grade isn't a direct schedule field.
+  if (gradeSearch) {
+    jobs = jobs.filter(j => {
+      const salesLine = salesLineMap[Number(j.line_seqno)];
+      const stock = salesLine ? stockMap[salesLine.stockcode] : null;
+      const grade = stock ? (stock.x_grade || '') : '';
+      return displayGrade(grade).toLowerCase().includes(gradeSearch) || grade.toLowerCase().includes(gradeSearch);
+    });
+  }
 
   document.getElementById('jobs-count').textContent = `${jobs.length} Jobs`;
 
@@ -1916,8 +1936,10 @@ function renderJobs() {
     const salesLine  = salesLineMap[Number(j.line_seqno)];
     const stock      = salesLine ? stockMap[salesLine.stockcode] : null;
     const stockcode  = salesLine ? salesLine.stockcode  : '—';
+    const linkedCode = salesLine ? (salesLine.linked_stockcode || '—') : '—';
     const stockdesc  = salesLine ? (salesLine.description || stock?.description || '') : '—';
     const grade      = stock    ? (stock.x_grade || '—') : '—';
+    const hdrSeqno   = salesLine ? (salesLine.hdr_seqno ?? '—') : '—';
 
     // m3 using developer's formula: x_cubic * (ord_quant - bkord_quant - sup_quant)
     let cubic = null;
@@ -1941,16 +1963,36 @@ function renderJobs() {
           : Number(j.iscomplete) === 1 ? `<span style="color:var(--green)">${j.completeqty || j.qty}</span>` : '—'
       }</td>
       <td class="mono" style="font-size:11px;">${stockcode}</td>
+      <td class="mono" style="font-size:11px;color:var(--muted);">${linkedCode}</td>
       <td class="td-muted" style="font-size:11px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${stockdesc}">${stockdesc}</td>
       <td class="mono" style="font-size:11px;">${displayGrade(grade)}</td>
       <td class="mono" style="color:var(--muted)">${salesLine ? (salesLine.ord_quant ?? '—') : '—'}</td>
       <td class="mono" style="color:var(--muted)">${salesLine ? (salesLine.unsup_quant ?? '—') : '—'}</td>
       <td class="mono" style="color:var(--faint);font-size:11px;">${stock ? (stock.x_cubic ?? '—') : '—'}</td>
       <td class="mono" style="color:${cubic !== null ? 'var(--accent)' : 'var(--faint)'};">${cubic !== null ? cubic.toFixed(3) : '—'}</td>
-      <td class="mono" style="color:var(--faint);font-size:10px;">${j.line_seqno ?? '—'}</td>
+      <td class="mono" style="color:var(--faint);font-size:10px;">${hdrSeqno}</td>
       <td>${statusLabel(j.iscomplete)}</td>
     </tr>`;
-  }).join('') || `<tr><td colspan="16" class="empty">No jobs match filter</td></tr>`;
+  }).join('') || `<tr><td colspan="17" class="empty">No jobs match filter</td></tr>`;
+}
+
+// Limits the machine filter dropdown to only machines belonging to the
+// currently selected branch — searching "all machines" across every branch
+// at once was never useful since jobs are already branch-scoped via the
+// branch filter, and it made the dropdown unnecessarily long.
+function refreshMachineFilterForBranch() {
+  const msel = document.getElementById('machine-filter-j');
+  if (!msel) return;
+  const cur = msel.value;
+  const branchFilter = globalBranch;
+  const relevantMachines = machines.filter(m =>
+    m.seqno !== 10000 && isActive(m) && (branchFilter === 'all' || Number(m.branchno) === Number(branchFilter))
+  );
+  msel.innerHTML = '<option value="all">All Machines</option>' +
+    relevantMachines.map(m => `<option value="${m.seqno}">${m.machine_name}</option>`).join('');
+  // Preserve selection only if that machine still belongs to the now-selected branch
+  msel.value = relevantMachines.some(m => String(m.seqno) === cur) ? cur : 'all';
+  renderJobs();
 }
 
 // ══════════════════════════════════════════════
@@ -2405,7 +2447,7 @@ function renderDashBlockProduction(branches) {
     rollingDays.forEach(d => { cubicByDay[d] = 0; });
     schedule.filter(j =>
       (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4) &&
-      rollingDays.includes(parseDate(j.startdate))
+      effectiveJobDate(parseDate(j.startdate), rollingDays) <= rollingDays[rollingDays.length-1]
     ).forEach(j => {
       const m = mMap[Number(j.machineno)];
       if (!m || Number(m.branchno) !== bn) return;
@@ -2415,7 +2457,7 @@ function renderDashBlockProduction(branches) {
       const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
       const jobCubic = parseFloat(st.x_cubic) * Math.max(0, lq);
       weekCubic += jobCubic;
-      const dStr = parseDate(j.startdate);
+      const dStr = effectiveJobDate(parseDate(j.startdate), rollingDays);
       if (cubicByDay[dStr] !== undefined) cubicByDay[dStr] += jobCubic;
     });
     const totalRequired = (blockM3>0 && wasteFac>0 && weekCubic>0) ? Math.ceil(weekCubic/(blockM3*wasteFac)) : 0;
@@ -2534,7 +2576,7 @@ function renderDashUnitProducts(branches) {
     rollingDays.forEach(d => { unitsByDay[d] = 0; });
     schedule.filter(j =>
       (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4) &&
-      rollingDays.includes(parseDate(j.startdate))
+      effectiveJobDate(parseDate(j.startdate), rollingDays) <= rollingDays[rollingDays.length-1]
     ).forEach(j => {
       const m = mMap[Number(j.machineno)];
       if (!m || Number(m.branchno) !== bn) return;
@@ -2543,7 +2585,7 @@ function renderDashUnitProducts(branches) {
       const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
       const units = Math.max(0, lq);
       weekUnits += units;
-      const dStr = parseDate(j.startdate);
+      const dStr = effectiveJobDate(parseDate(j.startdate), rollingDays);
       if (unitsByDay[dStr] !== undefined) unitsByDay[dStr] += units;
     });
     const totalRequired = Math.round(weekUnits);
@@ -3196,10 +3238,16 @@ async function renderBlockStock(silent) {
         let cubic = 0;
         const cubicByDay = {}; // date -> cubic scheduled that day (for proportional daily split)
         wk.workDays.forEach(d => { cubicByDay[d] = 0; });
-        schedule.filter(j =>
-          (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4) &&
-          wk.workDays.includes(parseDate(j.startdate))
-        ).forEach(j => {
+        // Only week 1 (the current week) pulls overdue jobs forward onto its
+        // earliest day — a job genuinely scheduled for week 2/3/4 isn't
+        // "overdue" relative to this week's calc and should keep its real date.
+        const windowForOverdueCheck = wk.offset === 0 ? wk.workDays : null;
+        schedule.filter(j => {
+          if (Number(j.iscomplete) !== 0 && Number(j.iscomplete) !== 4) return false;
+          const jDate = parseDate(j.startdate);
+          if (windowForOverdueCheck) return effectiveJobDate(jDate, windowForOverdueCheck) <= wk.workDays[wk.workDays.length-1];
+          return wk.workDays.includes(jDate);
+        }).forEach(j => {
           const m = mMap[Number(j.machineno)];
           if (!m || Number(m.branchno) !== bn) return;
           const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
@@ -3208,7 +3256,7 @@ async function renderBlockStock(silent) {
           const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
           const jobCubic = parseFloat(st.x_cubic) * Math.max(0, lq);
           cubic += jobCubic;
-          const dStr = parseDate(j.startdate);
+          const dStr = windowForOverdueCheck ? effectiveJobDate(parseDate(j.startdate), windowForOverdueCheck) : parseDate(j.startdate);
           if (cubicByDay[dStr] !== undefined) cubicByDay[dStr] += jobCubic;
         });
         const required = (blockM3>0 && wasteFac>0 && cubic>0) ? Math.ceil(cubic/(blockM3*wasteFac)) : 0;
@@ -3520,10 +3568,13 @@ async function renderUnitProducts(silent) {
         let totalUnits = 0;
         const unitsByDay = {};
         wk.workDays.forEach(d => { unitsByDay[d] = 0; });
-        schedule.filter(j =>
-          (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4) &&
-          wk.workDays.includes(parseDate(j.startdate))
-        ).forEach(j => {
+        const windowForOverdueCheck = wk.offset === 0 ? wk.workDays : null;
+        schedule.filter(j => {
+          if (Number(j.iscomplete) !== 0 && Number(j.iscomplete) !== 4) return false;
+          const jDate = parseDate(j.startdate);
+          if (windowForOverdueCheck) return effectiveJobDate(jDate, windowForOverdueCheck) <= wk.workDays[wk.workDays.length-1];
+          return wk.workDays.includes(jDate);
+        }).forEach(j => {
           const m = mMap[Number(j.machineno)];
           if (!m || Number(m.branchno) !== bn) return;
           const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
@@ -3531,7 +3582,7 @@ async function renderUnitProducts(silent) {
           const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
           const units = Math.max(0, lq);
           totalUnits += units;
-          const dStr = parseDate(j.startdate);
+          const dStr = windowForOverdueCheck ? effectiveJobDate(parseDate(j.startdate), windowForOverdueCheck) : parseDate(j.startdate);
           if (unitsByDay[dStr] !== undefined) unitsByDay[dStr] += units;
         });
         const required = Math.round(totalUnits); // units are already whole, no ceil-conversion needed
