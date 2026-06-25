@@ -671,7 +671,7 @@ async function sbDelete(table, id) {
 async function loadAllData() {
   setStatus('Loading…');
   try {
-    const [si, bse, bp, ba, bpt, sch, sl, mc, sharedSettings, use, up, ua, upt] = await Promise.all([
+    const [si, bse, bp, ba, bpt, sch, sl, mc, sharedSettings, branchOverrideRows, use, up, ua, upt] = await Promise.all([
       sbFetch('capacity_stock_items'),
       sbFetch('block_stock_entries'),
       sbFetch('block_production'),
@@ -681,6 +681,7 @@ async function loadAllData() {
       sbFetch('capacity_sales_lines'),
       sbFetch('capacity_machines'),
       sbFetch('capacity_app_settings', '&id=eq.1'),
+      sbFetch('capacity_branch_settings', `&branch_no=eq.${settings.branchNo}`),
       sbFetch('unit_stock_entries'),
       sbFetch('unit_production'),
       sbFetch('unit_adjustments'),
@@ -699,6 +700,17 @@ async function loadAllData() {
       settings.branchMaterial = shared.branchMaterial  || {};
       settings.unitProducts   = shared.unitProducts    || [];
     }
+
+    // This device's branch may have its own override (set via the main
+    // app's Settings > Branch Overrides admin section) — currently just
+    // grade visibility, takes priority over the global setting above so a
+    // branch can keep its own staff's view clean independent of every
+    // other branch and the TV dashboard.
+    if (branchOverrideRows && branchOverrideRows.length) {
+      const override = branchOverrideRows[0].settings || {};
+      if (override.excludedGrades) settings.excludedGrades = override.excludedGrades;
+    }
+
     setStatus(`Connected — updated ${new Date().toLocaleTimeString('en-NZ', {hour:'2-digit', minute:'2-digit'})}`, 'connected');
     return true;
   } catch (e) {
