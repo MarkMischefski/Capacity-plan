@@ -1181,6 +1181,29 @@
           </div>
         </div>
 
+        <div class="settings-card" style="max-width:900px;margin-bottom:20px;">
+          <div class="settings-card-header" style="display:flex;align-items:center;justify-content:space-between;">
+            <span>Branch Overrides (TV Dashboards)</span>
+            <span style="font-size:11px;color:var(--muted);font-weight:400;">Per-branch grade visibility for that branch's TV kiosk screen</span>
+          </div>
+          <div class="settings-card-body">
+            <div style="margin-bottom:14px;">
+              <label style="font-size:12px;color:var(--muted);display:block;margin-bottom:5px;">Branch</label>
+              <select id="branch-override-select" onchange="renderBranchOverrideGrades()" style="background:var(--card);border:1px solid var(--border2);color:var(--text);padding:7px 12px;border-radius:6px;font-size:13px;min-width:200px;"></select>
+            </div>
+            <div id="branch-override-grades-list">
+              <div style="color:var(--faint);font-size:13px;">Select a branch to configure its TV grade visibility.</div>
+            </div>
+            <div style="margin-top:14px;display:flex;align-items:center;gap:12px;">
+              <button class="btn" onclick="saveBranchOverride()">Save Branch Override</button>
+              <span id="branch-override-save-msg" style="font-size:12px;color:var(--green);display:none;">✓ Saved for this branch</span>
+            </div>
+            <div style="font-size:11px;color:var(--faint);margin-top:10px;">
+              Unchecked grades are hidden ONLY on that branch's TV dashboard — the main app and other branches are unaffected. Leave everything checked (or skip this branch entirely) to just use the global Grade Visibility setting above.
+            </div>
+          </div>
+        </div>
+
       </div>
       <div class="save-bar">
         <button class="btn secondary" onclick="saveSettingsLocal()" title="Applies to this device only — does not change shared settings on other devices">Save (this device only)</button>
@@ -1206,6 +1229,7 @@
 let settings = loadSettings();
 applyLocalOverrides();
 let sharedSettingsLoaded = false; // true once loadSharedSettingsFromSupabase() succeeds at least once this session
+let branchOverridesCache = {}; // branch_no -> settings jsonb, loaded on demand when the admin section is opened
 let currentWeekOffset = 0;
 let globalBranch = 'all';   // shared branch filter across all pages
 let machines   = [];
@@ -1466,6 +1490,92 @@ function captureUnitProductsFromForm() {
     updated[idx] = { name: input.value.trim(), codes };
   });
   settings.unitProducts = updated.filter(Boolean);
+}
+
+// ── Branch Overrides (TV dashboards) — per-branch setting overrides, stored
+// in capacity_branch_settings keyed by branch_no. Currently only grade
+// visibility, but the storage shape (a jsonb blob per branch) is generic so
+// more branch-specific settings can be added later without a schema change.
+async function loadBranchOverrides() {
+  try {
+    const res = await fetch(`${settings.supaUrl}/rest/v1/capacity_branch_settings?select=branch_no,settings`, { headers: supaHeaders() });
+    if (!res.ok) return;
+    const rows = await res.json();
+    branchOverridesCache = {};
+    rows.forEach(r => { branchOverridesCache[r.branch_no] = r.settings || {}; });
+  } catch(e) {
+    console.warn('Could not load branch overrides:', e);
+  }
+}
+
+function populateBranchOverrideSelect() {
+  const sel = document.getElementById('branch-override-select');
+  if (!sel) return;
+  const branches = getBranches();
+  const cur = sel.value;
+  sel.innerHTML = branches.map(b => `<option value="${b}">${branchName(b)} (#${b})</option>`).join('');
+  if (branches.some(b => String(b) === cur)) sel.value = cur;
+  renderBranchOverrideGrades();
+}
+
+function renderBranchOverrideGrades() {
+  const el = document.getElementById('branch-override-grades-list');
+  const sel = document.getElementById('branch-override-select');
+  if (!el || !sel || sel.value === '') return;
+  const branchNo = sel.value;
+
+  const allGrades = [...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))].sort();
+  if (!allGrades.length) {
+    el.innerHTML = '<div style="color:var(--faint);font-size:13px;">Grades appear here after data loads.</div>';
+    return;
+  }
+
+  const branchExcluded = new Set((branchOverridesCache[branchNo] || {}).excludedGrades || []);
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:4px;">
+      ${allGrades.map(g => `
+        <label class="machine-toggle-row ${branchExcluded.has(g) ? 'excluded' : ''}">
+          <input type="checkbox" class="branch-override-grade-toggle" data-grade="${g}"
+            ${branchExcluded.has(g) ? '' : 'checked'}
+            onchange="this.closest('.machine-toggle-row').classList.toggle('excluded', !this.checked)">
+          ${displayGrade(g)}
+        </label>`).join('')}
+    </div>`;
+}
+
+async function saveBranchOverride() {
+  const sel = document.getElementById('branch-override-select');
+  if (!sel || sel.value === '') return;
+  const branchNo = parseInt(sel.value);
+
+  const excludedGrades = [];
+  document.querySelectorAll('.branch-override-grade-toggle').forEach(cb => {
+    if (!cb.checked) excludedGrades.push(cb.dataset.grade);
+  });
+
+  const existing = branchOverridesCache[branchNo] || {};
+  const updated = { ...existing, excludedGrades };
+  branchOverridesCache[branchNo] = updated;
+
+  try {
+    const res = await fetch(`${settings.supaUrl}/rest/v1/capacity_branch_settings?on_conflict=branch_no`, {
+      method: 'POST',
+      headers: { ...supaHeaders(), 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify({ branch_no: branchNo, settings: updated, updated_at: new Date().toISOString() })
+    });
+    const msgEl = document.getElementById('branch-override-save-msg');
+    if (res.ok) {
+      msgEl.textContent = '✓ Saved for this branch';
+      msgEl.style.color = 'var(--green)';
+    } else {
+      msgEl.textContent = '✗ Save failed — check Supabase connection';
+      msgEl.style.color = 'var(--red)';
+    }
+    msgEl.style.display = 'inline';
+    setTimeout(() => { msgEl.style.display = 'none'; }, 3000);
+  } catch(e) {
+    console.error('saveBranchOverride failed:', e);
+  }
 }
 
 // isactive comes from Supabase as a boolean (sync_machines.py normalises it)
@@ -4395,6 +4505,10 @@ function renderSettings() {
     const hasOverrides = !!localStorage.getItem('expol_capacity_local_overrides');
     overrideIndicator.style.display = hasOverrides ? 'inline' : 'none';
   }
+
+  // Branch Overrides (TV dashboards) — load existing overrides from Supabase
+  // then populate the branch picker and that branch's grade toggle list
+  loadBranchOverrides().then(populateBranchOverrideSelect);
 
   // Branch names
   document.getElementById('branch-name-inputs').innerHTML = branches.map(b => `
