@@ -2051,11 +2051,14 @@ function renderJobs() {
     const grade      = stock    ? (stock.x_grade || '—') : '—';
     const hdrSeqno   = salesLine ? (salesLine.hdr_seqno ?? '—') : '—';
 
-    // m3 using developer's formula: x_cubic * (ord_quant - bkord_quant - sup_quant)
+    // m3 using formula: x_cubic * (ord_quant - sup_quant) — backorder qty
+    // is deliberately NOT subtracted: a backordered amount is still owed,
+    // just deferred, not fulfilled, so subtracting it understated true
+    // outstanding quantity (confirmed bug, was wrongly treating backorder
+    // like it had already been supplied).
     let cubic = null;
     if (stock && parseFloat(stock.x_cubic) > 0 && salesLine) {
       const lineQty = (parseFloat(salesLine.ord_quant) || 0)
-                    - (parseFloat(salesLine.bkord_quant) || 0)
                     - (parseFloat(salesLine.sup_quant) || 0);
       cubic = parseFloat(stock.x_cubic) * Math.max(0, lineQty);
     }
@@ -2158,7 +2161,6 @@ function renderMaterials() {
     const branchno = machine ? machine.branchno : 0;
 
     const lineQty = (parseFloat(salesLine.ord_quant)   || 0)
-                  - (parseFloat(salesLine.bkord_quant)  || 0)
                   - (parseFloat(salesLine.sup_quant)    || 0);
     const cubic = parseFloat(stock.x_cubic) * Math.max(0, lineQty);
     if (cubic <= 0) return;
@@ -2564,7 +2566,7 @@ function renderDashBlockProduction(branches) {
       const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
       const st = stMap[sl.stockcode];
       if (!st || (st.x_grade||'').trim() !== grade || !parseFloat(st.x_cubic)) return;
-      const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
+      const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
       const jobCubic = parseFloat(st.x_cubic) * Math.max(0, lq);
       weekCubic += jobCubic;
       const dStr = effectiveJobDate(parseDate(j.startdate), rollingDays);
@@ -2692,7 +2694,7 @@ function renderDashUnitProducts(branches) {
       if (!m || Number(m.branchno) !== bn) return;
       const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
       if (!codes.includes((sl.linked_stockcode||'').trim())) return;
-      const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
+      const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
       const units = Math.max(0, lq);
       weekUnits += units;
       const dStr = effectiveJobDate(parseDate(j.startdate), rollingDays);
@@ -2894,6 +2896,7 @@ let blockStockEntries      = [];
 let blockProduction        = [];
 let blockAdjustments       = [];
 let blockProductionTemplate = [];
+let blockAutoForecastSettings = []; // {branch_no, block_grade, min_level, is_auto} rows from block_auto_forecast
 let modalMode              = null;
 let bsSelectedGrades       = new Set(); // empty = all grades shown
 let cellHighlights         = []; // [{id, branch_no, grade, entry_date}] — toggleable visual markers, shared between Block Stock and Dashboard
@@ -2954,16 +2957,106 @@ async function loadBlockStockData() {
   try {
     const timeout = ms => new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms));
     const safe = async (fn) => { try { return await Promise.race([fn(), timeout(8000)]); } catch(e) { console.warn('Block stock fetch failed/timeout:', e); return []; } };
-    [blockStockEntries, blockProduction, blockAdjustments, blockProductionTemplate, cellHighlights] = await Promise.all([
+    [blockStockEntries, blockProduction, blockAdjustments, blockProductionTemplate, cellHighlights, blockAutoForecastSettings] = await Promise.all([
       safe(() => bsFetch('block_stock_entries')),
       safe(() => bsFetch('block_production')),
       safe(() => bsFetch('block_adjustments')),
       safe(() => bsFetchTemplate()),
       safe(() => bsFetch('capacity_cell_highlights')),
+      safe(() => bsFetch('block_auto_forecast')),
     ]);
-    console.log(`Block stock loaded: ${blockStockEntries.length} entries, ${blockProduction.length} production, ${blockAdjustments.length} adjustments, ${blockProductionTemplate.length} template rows, ${cellHighlights.length} highlights`);
+    console.log(`Block stock loaded: ${blockStockEntries.length} entries, ${blockProduction.length} production, ${blockAdjustments.length} adjustments, ${blockProductionTemplate.length} template rows, ${cellHighlights.length} highlights, ${blockAutoForecastSettings.length} auto-forecast settings`);
   } catch(e) {
     console.error('loadBlockStockData failed:', e);
+  }
+}
+
+// Returns this branch+grade's auto-forecast settings, or sensible defaults
+// (manual mode, min_level 0) if no row exists yet — i.e. every grade starts
+// in manual mode until someone explicitly turns auto on.
+function getAutoForecastSettings(bn, grade) {
+  const row = blockAutoForecastSettings.find(
+    r => Number(r.branch_no) === Number(bn) && r.block_grade === grade
+  );
+  return row ? { minLevel: row.min_level, isAuto: row.is_auto } : { minLevel: 0, isAuto: false };
+}
+
+// Upserts this branch+grade's auto-forecast settings row, updates local
+// state, and re-runs the auto-forecast calculation immediately if turning
+// auto ON (so the template reflects the new mode right away, rather than
+// waiting for some other trigger) — then re-renders Block Stock.
+async function saveAutoForecastSettings(bn, grade, minLevel, isAuto) {
+  const res = await fetch(
+    `${settings.supaUrl}/rest/v1/block_auto_forecast?on_conflict=branch_no,block_grade`,
+    {
+      method: 'POST',
+      headers: { ...supaHeaders(), 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify({
+        branch_no: Number(bn), block_grade: grade,
+        min_level: Number(minLevel) || 0, is_auto: !!isAuto,
+        updated_at: new Date().toISOString(),
+      }),
+    }
+  );
+  if (!res.ok) { console.error('saveAutoForecastSettings failed:', await res.text()); return false; }
+
+  // Update local state in place rather than re-fetching the whole table
+  const existing = blockAutoForecastSettings.find(
+    r => Number(r.branch_no) === Number(bn) && r.block_grade === grade
+  );
+  if (existing) {
+    existing.min_level = Number(minLevel) || 0;
+    existing.is_auto = !!isAuto;
+  } else {
+    blockAutoForecastSettings.push({ branch_no: Number(bn), block_grade: grade, min_level: Number(minLevel) || 0, is_auto: !!isAuto });
+  }
+
+  if (isAuto) {
+    const result = calcAutoForecast(bn, grade, Number(minLevel) || 0);
+    await applyAutoForecastToTemplate(bn, grade, result);
+  }
+
+  renderBlockStock(true);
+  return true;
+}
+
+// Toggle button handler — flips is_auto, reading the min-level value
+// currently sitting in that card's input box (so a value typed but not yet
+// explicitly "saved" still gets used the moment auto is switched on).
+async function toggleAutoForecast(bn, grade) {
+  const cur = getAutoForecastSettings(bn, grade);
+  const inputEl = document.getElementById(`af-min-${bn}-${grade}`);
+  const minLevel = inputEl ? (parseFloat(inputEl.value) || 0) : cur.minLevel;
+  await saveAutoForecastSettings(bn, grade, minLevel, !cur.isAuto);
+}
+
+// Min-level input's onchange handler — saves the new value AND, if this
+// grade is currently in auto mode, immediately re-runs the calculation so
+// the template reflects the new target right away rather than waiting for
+// the next unrelated re-render.
+async function saveAutoForecastMinLevel(bn, grade, value) {
+  const cur = getAutoForecastSettings(bn, grade);
+  await saveAutoForecastSettings(bn, grade, parseFloat(value) || 0, cur.isAuto);
+}
+
+// Re-runs calcAutoForecast + applyAutoForecastToTemplate for every
+// branch+grade currently sitting in auto mode. Called once per genuine
+// Block Stock page load (see renderBlockStock), so an auto-mode grade's
+// production schedule keeps reflecting newly-synced demand without anyone
+// needing to manually re-trigger it — left in Auto, it just keeps working.
+// Runs sequentially (not Promise.all) since applyAutoForecastToTemplate
+// does several awaited Supabase writes per grade; running many of these
+// concurrently risks hitting rate limits for branches with many grades.
+async function refreshAllAutoForecasts() {
+  const autoRows = blockAutoForecastSettings.filter(r => r.is_auto);
+  for (const row of autoRows) {
+    try {
+      const result = calcAutoForecast(row.branch_no, row.block_grade, row.min_level || 0);
+      await applyAutoForecastToTemplate(row.branch_no, row.block_grade, result);
+    } catch (e) {
+      console.error(`refreshAllAutoForecasts failed for branch ${row.branch_no} / ${row.block_grade}:`, e);
+      // Keep going — one grade's failure shouldn't block the rest from refreshing.
+    }
   }
 }
 
@@ -3061,7 +3154,6 @@ function calcBlockStock(branchNo, grade) {
       if (!stock || (stock.x_grade || '').trim() !== grade) return;
       if (!parseFloat(stock.x_cubic) || blockM3 === 0 || wasteFac <= 0) return;
       const lineQty = (parseFloat(sl.ord_quant)   || 0)
-                    - (parseFloat(sl.bkord_quant)  || 0)
                     - (parseFloat(sl.sup_quant)    || 0);
       usedCubic += parseFloat(stock.x_cubic) * Math.max(0, lineQty);
     });
@@ -3069,6 +3161,173 @@ function calcBlockStock(branchNo, grade) {
 
   const current = baseQty + produced + adjustments - usedBlocks;
   return { baseQty, baseDate, produced, adjustments, usedBlocks, current };
+}
+
+// ── Auto-forecast engine ──────────────────────────────────────────────────
+// Confirmed algorithm (see conversation for full derivation):
+//   1. Walk forward 10 working days (2 weeks) starting TOMORROW (today is
+//      already locked in / past editing).
+//   2. Running stock = current stock, then for each day: if that day has a
+//      manual override (a real block_production entry), use ITS qty;
+//      otherwise no production is assumed yet (that's what we're solving
+//      for) — just subtract that day's requirement.
+//   3. Find the LOWEST point the running stock reaches across the whole
+//      window, and the FIRST day it occurs on (in case of a plateau/tie).
+//   4. Shortfall = min_level - lowest_point. If <= 0, no production needed
+//      at all (clear any existing non-overridden template entries).
+//   5. Round the shortfall UP to the next multiple of 5.
+//   6. Schedule that whole batch 5 WORKING days before the low-point day.
+//      If that scheduling day has already passed (less than 5 working days
+//      of runway left), clamp forward to tomorrow instead.
+//   7. Write that qty into block_production_template for the scheduled
+//      day's day-of-week — but ONLY if that specific day isn't manually
+//      overridden. Every other (non-overridden) day in the template gets
+//      cleared to 0, since auto-forecast fully supersedes whatever was
+//      there before, except actual overrides.
+
+// Returns an array of `count` working-day date strings starting the day
+// after `fromDateStr` (skips weekends entirely — they're never counted
+// towards the 5/10 working-day figures).
+function getWorkingDaysAfter(fromDateStr, count) {
+  const days = [];
+  const d = new Date(fromDateStr + 'T00:00:00');
+  while (days.length < count) {
+    d.setDate(d.getDate() + 1);
+    const dow = d.getDay(); // 0=Sun..6=Sat
+    if (dow !== 0 && dow !== 6) days.push(fmtDateLocal(d));
+  }
+  return days;
+}
+
+// Per-day requirement (in blocks) for a branch+grade across an arbitrary
+// window of date strings — same job-scanning + proportional-by-day cubic
+// distribution already used on the Block Stock page and Dashboard, just
+// generalised to any window length/start rather than a fixed 5-day rolling
+// window. Returns { [dateStr]: blocksRequired }.
+function calcRequirementByDay(bn, grade, windowDays) {
+  const mat      = (settings.branchMaterial || {})[bn] || {};
+  const blockM3  = parseFloat(mat.blockM3)  || 0;
+  const wasteFac = 1 - ((parseFloat(mat.wastePct)||0)/100);
+  const mMap  = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
+  const slMap = Object.fromEntries(salesLines.map(l => [Number(l.solineid), l]));
+  const stMap = Object.fromEntries(stockItems.map(s => [s.stockcode, s]));
+
+  let weekCubic = 0;
+  const cubicByDay = {};
+  windowDays.forEach(d => { cubicByDay[d] = 0; });
+
+  schedule.filter(j =>
+    (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4) &&
+    effectiveJobDate(parseDate(j.startdate), windowDays) <= windowDays[windowDays.length-1]
+  ).forEach(j => {
+    const m = mMap[Number(j.machineno)];
+    if (!m || Number(m.branchno) !== bn) return;
+    const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
+    const st = stMap[sl.stockcode];
+    if (!st || (st.x_grade||'').trim() !== grade || !parseFloat(st.x_cubic)) return;
+    const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
+    const jobCubic = parseFloat(st.x_cubic) * Math.max(0, lq);
+    weekCubic += jobCubic;
+    const dStr = effectiveJobDate(parseDate(j.startdate), windowDays);
+    if (cubicByDay[dStr] !== undefined) cubicByDay[dStr] += jobCubic;
+  });
+
+  const totalRequired = (blockM3>0 && wasteFac>0 && weekCubic>0) ? weekCubic/(blockM3*wasteFac) : 0;
+  const reqByDay = {};
+  windowDays.forEach(d => {
+    reqByDay[d] = weekCubic > 0 ? totalRequired * (cubicByDay[d] / weekCubic) : 0;
+  });
+  return reqByDay;
+}
+
+// Does this branch+grade+date have a manual OVERRIDE — a real
+// block_production row — as opposed to just a template-derived forecast?
+// This is the distinction the auto-forecast must respect: overrides are
+// read (their value is used in the simulation) but never written over.
+function hasManualOverride(bn, grade, dateStr) {
+  return getActualProduction(bn, grade, dateStr) !== null;
+}
+
+// Runs the full algorithm above for one branch+grade and returns
+// { targetDay, qty } if production is needed, or null if the projection
+// never dips below min_level across the whole window.
+function calcAutoForecast(bn, grade, minLevel) {
+  const stock = calcBlockStock(bn, grade);
+  const currentStock = stock ? stock.current : 0;
+  const todayStr = todayLocal();
+
+  const windowDays = getWorkingDaysAfter(todayStr, 10); // next 10 working days, starting tomorrow
+  const reqByDay = calcRequirementByDay(bn, grade, windowDays);
+
+  let running = currentStock;
+  let lowest = running;
+  let lowestDay = null;
+
+  windowDays.forEach(d => {
+    const override = getActualProduction(bn, grade, d);
+    if (override !== null) {
+      running += override.qty;
+    }
+    running -= (reqByDay[d] || 0);
+    if (lowestDay === null || running < lowest) {
+      lowest = running;
+      lowestDay = d;
+    }
+  });
+
+  const shortfall = minLevel - lowest;
+  if (shortfall <= 0 || lowestDay === null) return null;
+
+  const qty = Math.ceil(shortfall / 5) * 5;
+
+  // Target day = 5 working days before the low point. Build the working-day
+  // sequence backwards from lowestDay to find it precisely (mirrors
+  // getWorkingDaysAfter, just walking the other direction).
+  let targetDate = new Date(lowestDay + 'T00:00:00');
+  let remaining = 5;
+  while (remaining > 0) {
+    targetDate.setDate(targetDate.getDate() - 1);
+    const dow = targetDate.getDay();
+    if (dow !== 0 && dow !== 6) remaining--;
+  }
+  let targetDay = fmtDateLocal(targetDate);
+
+  // Clamp: if the target day has already passed (less than 5 working days
+  // of runway left before the shortfall hits), schedule it on the earliest
+  // still-editable day instead — tomorrow, since today is already locked in.
+  const tomorrow = getWorkingDaysAfter(todayStr, 1)[0];
+  if (targetDay < tomorrow) targetDay = tomorrow;
+
+  return { targetDay, qty };
+}
+
+// Applies a calcAutoForecast result to the weekly template: writes the
+// scheduled qty onto the target day's day-of-week (unless that day is
+// manually overridden, in which case the override wins and nothing is
+// written), and clears every OTHER non-overridden day-of-week to 0 — since
+// auto-forecast fully replaces whatever the template held before.
+async function applyAutoForecastToTemplate(bn, grade, result) {
+  const todayStr = todayLocal();
+  const windowDays = getWorkingDaysAfter(todayStr, 10);
+
+  // Which day-of-week (0=Mon..4=Fri) should carry the batch, if any.
+  let targetDow = null;
+  if (result) {
+    const d = new Date(result.targetDay + 'T00:00:00');
+    targetDow = (d.getDay() + 6) % 7;
+  }
+
+  for (let dow = 0; dow <= 4; dow++) {
+    // Use the FIRST upcoming date for this day-of-week to check for an
+    // override — overrides are date-specific, templates are dow-specific,
+    // so this is just picking a representative date to check against.
+    const representativeDate = windowDays.find(d => (new Date(d+'T00:00:00').getDay()+6)%7 === dow);
+    if (representativeDate && hasManualOverride(bn, grade, representativeDate)) {
+      continue; // never write over a manually overridden day
+    }
+    const qty = (dow === targetDow && result) ? result.qty : 0;
+    await saveTemplateRow(bn, grade, dow, qty);
+  }
 }
 
 // ── Forecast helpers ──────────────────────────
@@ -3216,7 +3475,6 @@ function calcUnitStock(branchNo, productName) {
       const sl = slMap[Number(j.line_seqno)];
       if (!sl || !codes.includes((sl.linked_stockcode||'').trim())) return;
       const lineQty = (parseFloat(sl.ord_quant)  || 0)
-                    - (parseFloat(sl.bkord_quant) || 0)
                     - (parseFloat(sl.sup_quant)   || 0);
       usedUnits += Math.max(0, lineQty);
     });
@@ -3304,6 +3562,16 @@ async function renderBlockStock(silent) {
   if (!silent) {
     container.innerHTML = '<div class="mat-no-data" style="color:var(--muted);">Loading block stock data...</div>';
     await loadBlockStockData();
+    // Re-run auto-forecast for every grade currently left in auto mode, so a
+    // toggled-on grade keeps recalculating as new jobs/orders come in via
+    // sync — without this, auto mode would only ever recalculate at the
+    // moment someone clicks the toggle or edits min-level, and could go
+    // stale relative to newly-synced demand. Deliberately only on a genuine
+    // page load/refresh (this !silent branch), not on every quiet
+    // re-render — recalculating on every silent refresh would mean
+    // needless repeated Supabase writes and could fight with someone
+    // actively editing a different grade's forecast mid-refresh.
+    await refreshAllAutoForecasts();
   }
   buildGradeDropdown();
 
@@ -3372,7 +3640,7 @@ async function renderBlockStock(silent) {
           const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
           const st = stMap[sl.stockcode];
           if (!st || (st.x_grade||'').trim() !== grade || !parseFloat(st.x_cubic)) return;
-          const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
+          const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
           const jobCubic = parseFloat(st.x_cubic) * Math.max(0, lq);
           cubic += jobCubic;
           const dStr = windowForOverdueCheck ? effectiveJobDate(parseDate(j.startdate), windowForOverdueCheck) : parseDate(j.startdate);
@@ -3408,6 +3676,7 @@ async function renderBlockStock(silent) {
       const currentStock = stock ? stock.current : 0;
       const stockCol     = currentStock <= 0 ? 'var(--red)' : currentStock < totalReq ? 'var(--amber)' : 'var(--green)';
       const cardId = `bsc-${bn}-${grade.replace(/\s+/g,'_')}`; // kept for potential future use
+      const autoFc = getAutoForecastSettings(bn, grade);
 
       // Balance tiles — week label left, big balance centre, req/fcast below
       let runBal = currentStock;
@@ -3485,7 +3754,14 @@ async function renderBlockStock(silent) {
             <span style="font-size:11px;color:var(--muted);">${branchName(bn)}</span>
             ${blockM3===0 ? '<span style="font-size:10px;color:var(--red);">set block m³ in settings</span>' : ''}
             <span style="font-size:12px;color:${stockCol};font-family:var(--mono);font-weight:600;margin-left:auto;">${Math.round(currentStock)} in stock</span>
-            <button onclick="showForecastTemplateModal('${bn}','${grade}')" style="font-size:11px;background:var(--card);border:1px solid var(--border2);color:var(--accent);padding:2px 8px;border-radius:5px;cursor:pointer;font-weight:500;">Set forecast</button>
+            <button onclick="toggleAutoForecast('${bn}','${grade}')" title="${autoFc.isAuto ? 'Auto-forecast is ON — click to switch to manual' : 'Manual forecast — click to switch to auto'}" style="font-size:11px;background:${autoFc.isAuto?'var(--accent)':'var(--card)'};border:1px solid ${autoFc.isAuto?'var(--accent)':'var(--border2)'};color:${autoFc.isAuto?'#1a1a1a':'var(--muted)'};padding:2px 8px;border-radius:5px;cursor:pointer;font-weight:600;">${autoFc.isAuto ? 'Auto' : 'Manual'}</button>
+            <span style="display:flex;align-items:center;gap:3px;font-size:10px;color:var(--faint);">
+              Min
+              <input id="af-min-${bn}-${grade}" type="number" min="0" step="1" value="${autoFc.minLevel || 0}"
+                onchange="saveAutoForecastMinLevel('${bn}','${grade}',this.value)"
+                style="width:48px;background:var(--card);border:1px solid var(--border2);color:var(--text);border-radius:4px;padding:2px 4px;font-family:var(--mono);font-size:11px;">
+            </span>
+            <button onclick="showForecastTemplateModal('${bn}','${grade}')" ${autoFc.isAuto ? 'disabled title="Switch to Manual to edit the forecast directly"' : ''} style="font-size:11px;background:var(--card);border:1px solid var(--border2);color:${autoFc.isAuto?'var(--faint)':'var(--accent)'};padding:2px 8px;border-radius:5px;cursor:${autoFc.isAuto?'not-allowed':'pointer'};font-weight:500;opacity:${autoFc.isAuto?'0.5':'1'};">Set forecast</button>
             <button onclick="showStockEntryModal('${bn}','${grade}')" style="font-size:11px;background:var(--card);border:1px solid var(--border2);color:var(--muted);padding:2px 8px;border-radius:5px;cursor:pointer;">+ Stock</button>
             <button onclick="showProductionModal('${bn}','${grade}')" style="font-size:11px;background:var(--card);border:1px solid var(--border2);color:var(--muted);padding:2px 8px;border-radius:5px;cursor:pointer;">+ Actual</button>
             <button onclick="showAdjustmentModal('${bn}','${grade}')" style="font-size:11px;background:var(--card);border:1px solid var(--border2);color:var(--muted);padding:2px 8px;border-radius:5px;cursor:pointer;">+/- Adj</button>
@@ -3557,7 +3833,7 @@ async function renderBlockStock(silent) {
                     const sl=slMap[Number(j.line_seqno)]; if(!sl) return [];
                     const st=stMap[sl.stockcode];
                     if(!st||(st.x_grade||'').trim()!==grade||!parseFloat(st.x_cubic)||blockM3===0||wasteFac<=0) return [];
-                    const lq=(parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
+                    const lq=(parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
                     // Show the job's true fractional block usage (1 decimal) —
                     // NOT rounded up. Rounding each job individually before
                     // summing was the original bug; this list must reflect the
@@ -3698,7 +3974,7 @@ async function renderUnitProducts(silent) {
           if (!m || Number(m.branchno) !== bn) return;
           const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
           if (!codes.includes((sl.linked_stockcode||'').trim())) return;
-          const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
+          const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
           const units = Math.max(0, lq);
           totalUnits += units;
           const dStr = windowForOverdueCheck ? effectiveJobDate(parseDate(j.startdate), windowForOverdueCheck) : parseDate(j.startdate);
@@ -3847,7 +4123,7 @@ async function renderUnitProducts(silent) {
                     if(!m||Number(m.branchno)!==bn) return [];
                     const sl=slMap[Number(j.line_seqno)]; if(!sl) return [];
                     if(!codes.includes((sl.linked_stockcode||'').trim())) return [];
-                    const lq=(parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
+                    const lq=(parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
                     const units=Math.max(0,lq);
                     return units>0?[{date:j.completime||j.finishdate,type:'used',qty:-units,note:`Job #${sl.hdr_seqno} — ${sl.stockcode}`,id:null,table:null}]:[];
                   }),
@@ -3972,7 +4248,7 @@ async function renderAnalytics() {
         const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
         const st = stMap[sl.stockcode];
         if (!st || (st.x_grade||'').trim() !== grade || !parseFloat(st.x_cubic)) return;
-        const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
+        const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
         cubic += parseFloat(st.x_cubic) * Math.max(0, lq);
       });
       const required = (blockM3>0 && wasteFac>0 && cubic>0) ? Math.ceil(cubic/(blockM3*wasteFac)) : 0;
@@ -4002,7 +4278,7 @@ async function renderAnalytics() {
         if (!m || Number(m.branchno) !== bn) return;
         const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
         if (!codes.includes((sl.linked_stockcode||'').trim())) return;
-        const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
+        const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
         units += Math.max(0, lq);
       });
       const required = Math.round(units);
