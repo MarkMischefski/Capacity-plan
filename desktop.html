@@ -3144,7 +3144,7 @@ function calcBlockStock(branchNo, grade) {
   // not in the underlying stock deduction itself.
   let usedCubic = 0;
   schedule
-    .filter(j => Number(j.iscomplete) === 1 && (j.completime || j.finishdate) >= baseDate)
+    .filter(j => (Number(j.iscomplete) === 1 || Number(j.iscomplete) === 2) && (j.completime || j.finishdate) >= baseDate)
     .forEach(j => {
       const m = machineMap[Number(j.machineno)];
       if (!m || Number(m.branchno) !== bn) return;
@@ -3153,9 +3153,13 @@ function calcBlockStock(branchNo, grade) {
       const stock = stockMap[sl.stockcode];
       if (!stock || (stock.x_grade || '').trim() !== grade) return;
       if (!parseFloat(stock.x_cubic) || blockM3 === 0 || wasteFac <= 0) return;
-      const lineQty = (parseFloat(sl.ord_quant)   || 0)
-                    - (parseFloat(sl.sup_quant)    || 0);
-      usedCubic += parseFloat(stock.x_cubic) * Math.max(0, lineQty);
+      // For completed jobs, use completeqty (actual units produced) rather than
+      // ord_quant - sup_quant. For fully supplied orders (STATUS=2) sup_quant
+      // equals ord_quant making lineQty=0, which would contribute nothing to
+      // usage — but the blocks were genuinely used, so we need the actual qty
+      // produced. Fall back to j.qty (scheduled qty) if completeqty is absent.
+      const doneQty = parseFloat(j.completeqty) || parseFloat(j.qty) || 0;
+      usedCubic += parseFloat(stock.x_cubic) * Math.max(0, doneQty);
     });
   const usedBlocks = (blockM3 > 0 && wasteFac > 0) ? usedCubic / (blockM3 * wasteFac) : 0;
 
@@ -3468,15 +3472,17 @@ function calcUnitStock(branchNo, productName) {
   const machineMap = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
   let usedUnits = 0;
   schedule
-    .filter(j => Number(j.iscomplete) === 1 && (j.completime || j.finishdate) >= baseDate)
+    .filter(j => (Number(j.iscomplete) === 1 || Number(j.iscomplete) === 2) && (j.completime || j.finishdate) >= baseDate)
     .forEach(j => {
       const m = machineMap[Number(j.machineno)];
       if (!m || Number(m.branchno) !== bn) return;
       const sl = slMap[Number(j.line_seqno)];
       if (!sl || !codes.includes((sl.linked_stockcode||'').trim())) return;
-      const lineQty = (parseFloat(sl.ord_quant)  || 0)
-                    - (parseFloat(sl.sup_quant)   || 0);
-      usedUnits += Math.max(0, lineQty);
+      // Use completeqty (actual units produced) for completed jobs — same
+      // reasoning as calcBlockStock: for fully supplied orders, ord_quant -
+      // sup_quant = 0, making lineQty=0 and contributing nothing to usage.
+      const doneQty = parseFloat(j.completeqty) || parseFloat(j.qty) || 0;
+      usedUnits += Math.max(0, doneQty);
     });
 
   const current = baseQty + produced + adjustments - usedUnits;
@@ -3827,18 +3833,14 @@ async function renderBlockStock(silent) {
                     .map(p=>({date:p.production_date,type:'produced',qty:p.qty,note:p.notes||'Production',id:p.id,table:'block_production'})),
                   ...blockAdjustments.filter(a=>Number(a.branch_no)===bn&&a.grade===grade)
                     .map(a=>({date:a.adjustment_date,type:'adjust',qty:a.qty,note:a.reason||'Adjustment',id:a.id,table:'block_adjustments'})),
-                  ...schedule.filter(j=>Number(j.iscomplete)===1&&stock&&(j.completime||j.finishdate)>=stock.baseDate).flatMap(j=>{
+                  ...schedule.filter(j=>( Number(j.iscomplete)===1||Number(j.iscomplete)===2)&&stock&&(j.completime||j.finishdate)>=stock.baseDate).flatMap(j=>{
                     const m=mMap[Number(j.machineno)];
                     if(!m||Number(m.branchno)!==bn) return [];
                     const sl=slMap[Number(j.line_seqno)]; if(!sl) return [];
                     const st=stMap[sl.stockcode];
                     if(!st||(st.x_grade||'').trim()!==grade||!parseFloat(st.x_cubic)||blockM3===0||wasteFac<=0) return [];
-                    const lq=(parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
-                    // Show the job's true fractional block usage (1 decimal) —
-                    // NOT rounded up. Rounding each job individually before
-                    // summing was the original bug; this list must reflect the
-                    // same unrounded-per-job figures calcBlockStock now uses.
-                    const bl=parseFloat(st.x_cubic)*Math.max(0,lq)/(blockM3*wasteFac);
+                    const doneQty=(parseFloat(j.completeqty)||parseFloat(j.qty)||0);
+                    const bl=parseFloat(st.x_cubic)*Math.max(0,doneQty)/(blockM3*wasteFac);
                     return bl>0?[{date:j.completime||j.finishdate,type:'used',qty:-bl,note:`Job #${sl.hdr_seqno} — ${sl.stockcode}`,id:null,table:null}]:[];
                   }),
                 ].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,20);
@@ -4118,13 +4120,13 @@ async function renderUnitProducts(silent) {
                     .map(p=>({date:p.production_date,type:'produced',qty:p.qty,note:p.notes||'Production',id:p.id,table:'unit_production'})),
                   ...unitAdjustments.filter(a=>Number(a.branch_no)===bn&&a.product_name===productName)
                     .map(a=>({date:a.adjustment_date,type:'adjust',qty:a.qty,note:a.reason||'Adjustment',id:a.id,table:'unit_adjustments'})),
-                  ...schedule.filter(j=>Number(j.iscomplete)===1&&stock&&(j.completime||j.finishdate)>=stock.baseDate).flatMap(j=>{
+                  ...schedule.filter(j=>( Number(j.iscomplete)===1||Number(j.iscomplete)===2)&&stock&&(j.completime||j.finishdate)>=stock.baseDate).flatMap(j=>{
                     const m=mMap[Number(j.machineno)];
                     if(!m||Number(m.branchno)!==bn) return [];
                     const sl=slMap[Number(j.line_seqno)]; if(!sl) return [];
                     if(!codes.includes((sl.linked_stockcode||'').trim())) return [];
-                    const lq=(parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
-                    const units=Math.max(0,lq);
+                    const doneQty=(parseFloat(j.completeqty)||parseFloat(j.qty)||0);
+                    const units=Math.max(0,doneQty);
                     return units>0?[{date:j.completime||j.finishdate,type:'used',qty:-units,note:`Job #${sl.hdr_seqno} — ${sl.stockcode}`,id:null,table:null}]:[];
                   }),
                 ].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,20);
@@ -4926,7 +4928,7 @@ async function fetchFromSupabase() {
     if (!mRes.ok) { console.error('machines fetch failed', mRes.status); return false; }
     const mData = await mRes.json();
 
-    const sData = await fetchAllPages('capacity_schedule', 'startdate.asc', 1000, 'iscomplete=in.(0,1,4)');
+    const sData = await fetchAllPages('capacity_schedule', 'startdate.asc', 1000, 'iscomplete=in.(0,1,2,4)');
 
     machines = mData;
     schedule = sData;
