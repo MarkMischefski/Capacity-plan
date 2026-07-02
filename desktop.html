@@ -4625,13 +4625,13 @@ async function saveModal() {
     // happened Wed/Thu when the count was taken Tue) must be kept, since they
     // represent real activity since the count and should still apply on top of it.
     if (ok && dt <= todayLocal()) {
-      const prodToDelete = blockProduction.filter(p => Number(p.branch_no)===bn && p.grade===grade && p.production_date<=dt);
-      const adjToDelete  = blockAdjustments.filter(a => Number(a.branch_no)===bn && a.grade===grade && a.adjustment_date<=dt);
-      await Promise.all([
-        ...prodToDelete.map(r => bsDelete('block_production', r.id)),
-        ...adjToDelete.map(r  => bsDelete('block_adjustments', r.id)),
-      ]);
-      // Remove older opening entries — new one is now the sole base
+      // Remove older OPENING ENTRIES only — the new stocktake count becomes the
+      // sole base, so prior stock counts are superseded and should be removed.
+      // Historical block_production and block_adjustments rows are deliberately
+      // KEPT even though they predate this stocktake — the balance calculation
+      // already excludes them (it only sums production >= baseDate), so they
+      // don't affect the current stock figure, but deleting them would
+      // permanently destroy production history needed for analytics.
       const oldEntries = blockStockEntries.filter(
         e => Number(e.branch_no)===bn && e.grade===grade && e.entry_date < dt
       );
@@ -4647,7 +4647,10 @@ async function saveModal() {
   if (ok) {
     closeModal();
     await loadBlockStockData();
-    renderBlockStock();
+    // DIAGNOSTIC — remove once bug is confirmed fixed
+    console.log(`[stocktake diag] blockProduction after reload: ${blockProduction.length} rows`);
+    console.log('[stocktake diag] entries:', blockProduction.filter(p => p.grade === grade && Number(p.branch_no) === bn).map(p => `${p.production_date}:${p.qty}`).join(', '));
+    renderBlockStock(true); // silent — data already freshly loaded above, don't re-fetch
   } else {
     alert('Save failed — check Supabase connection.');
   }
