@@ -1162,6 +1162,16 @@
 
         <div class="settings-card" style="max-width:900px;margin-bottom:20px;">
           <div class="settings-card-header" style="display:flex;align-items:center;justify-content:space-between;">
+            <span>Grade Order</span>
+            <span style="font-size:11px;color:var(--muted);font-weight:400;">Drag to reorder — applies to Block Stock, Dashboard, and Material Needs pages</span>
+          </div>
+          <div class="settings-card-body" id="grade-order-list">
+            <div style="color:var(--faint);font-size:13px;">Grades appear here after data loads.</div>
+          </div>
+        </div>
+
+        <div class="settings-card" style="max-width:900px;margin-bottom:20px;">
+          <div class="settings-card-header" style="display:flex;align-items:center;justify-content:space-between;">
             <span>Unit Products</span>
             <span style="font-size:11px;color:var(--muted);font-weight:400;">Products tracked by simple unit count (e.g. pods) — matched by LINKED_STOCKCODE, no cubic/block conversion</span>
           </div>
@@ -1249,6 +1259,7 @@ function loadSettings() {
     excludedMachines: [],
     branchMaterial:   {},  // branchno -> { blockM3: float, wastePct: float }
     excludedGrades:   [],  // grades to hide in material needs page
+    gradeOrder:       [],  // preferred display order for block grades (drag-to-reorder in Settings)
     gradeNames:       {},  // ERP grade code -> friendly display name
     unitProducts:     [],  // [{name: "220mm Pod", codes: ["POD11220","L.POD01"]}] — products tracked by unit count, not cubic/blocks
   };
@@ -1447,6 +1458,22 @@ function isMachineEnabled(m) {
 function branchName(n) { return settings.branchNames[n] || `Branch ${n}`; }
 function displayGrade(g) { return (settings.gradeNames && settings.gradeNames[g]) || g; }
 
+// Apply the user's preferred grade order (set via drag in Settings) to any
+// array of grade codes. Grades not yet in gradeOrder are appended at the end
+// in their original order, so newly-added grades always show up rather than
+// being silently hidden until manually ordered.
+function orderedGrades(grades) {
+  const order = settings.gradeOrder || [];
+  if (!order.length) return grades;
+  const orderMap = Object.fromEntries(order.map((g, i) => [g, i]));
+  return [...grades].sort((a, b) => {
+    const ai = orderMap[a] ?? Infinity;
+    const bi = orderMap[b] ?? Infinity;
+    if (ai !== bi) return ai - bi;
+    return grades.indexOf(a) - grades.indexOf(b); // preserve original order for unranked
+  });
+}
+
 // ── Unit Products settings (pods etc — tracked by unit count, matched via LINKED_STOCKCODE) ──
 function renderUnitProductsList() {
   const el = document.getElementById('unit-products-list');
@@ -1524,7 +1551,7 @@ function renderBranchOverrideGrades() {
   if (!el || !sel || sel.value === '') return;
   const branchNo = sel.value;
 
-  const allGrades = [...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))].sort();
+  const allGrades = orderedGrades([...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))].sort());
   if (!allGrades.length) {
     el.innerHTML = '<div style="color:var(--faint);font-size:13px;">Grades appear here after data loads.</div>';
     return;
@@ -2029,7 +2056,9 @@ function renderJobs() {
     const v = Number(s);
     if (v === 0) return `<span style="color:var(--muted);font-size:11px;">Planned</span>`;
     if (v === 4) return `<span style="color:var(--amber);font-size:11px;">⚠ Partial</span>`;
-    return `<span style="color:var(--green);font-size:11px;">✓ Complete</span>`;
+    if (v === 1) return `<span style="color:var(--green);font-size:11px;">✓ Complete</span>`;
+    if (v === 2) return `<span style="color:var(--green);font-size:11px;">✓ Supplied</span>`;
+    return `<span style="color:var(--faint);font-size:11px;">${v}</span>`;
   };
 
   document.getElementById('jobs-tbody').innerHTML = jobs.map(j => {
@@ -2051,16 +2080,24 @@ function renderJobs() {
     const grade      = stock    ? (stock.x_grade || '—') : '—';
     const hdrSeqno   = salesLine ? (salesLine.hdr_seqno ?? '—') : '—';
 
-    // m3 using formula: x_cubic * (ord_quant - sup_quant) — backorder qty
-    // is deliberately NOT subtracted: a backordered amount is still owed,
-    // just deferred, not fulfilled, so subtracting it understated true
-    // outstanding quantity (confirmed bug, was wrongly treating backorder
-    // like it had already been supplied).
+    // m³ displayed depends on job state:
+    // - Outstanding (iscomplete=0/4): outstanding cubic = x_cubic * (ord_quant - sup_quant)
+    // - Complete (iscomplete=1): actual cubic = x_cubic * (completeqty || qty)
+    // - Supplied (iscomplete=2): actual cubic = x_cubic * sup_quant
+    //   (ord_quant - sup_quant = 0 for fully supplied, so outstanding formula
+    //   gives zero — not useful. sup_quant is the authoritative "what was made".)
     let cubic = null;
     if (stock && parseFloat(stock.x_cubic) > 0 && salesLine) {
-      const lineQty = (parseFloat(salesLine.ord_quant) || 0)
-                    - (parseFloat(salesLine.sup_quant) || 0);
-      cubic = parseFloat(stock.x_cubic) * Math.max(0, lineQty);
+      const ic = Number(j.iscomplete);
+      let displayQty;
+      if (ic === 2) {
+        displayQty = parseFloat(salesLine.sup_quant) || 0;
+      } else if (ic === 1) {
+        displayQty = parseFloat(j.completeqty) || parseFloat(j.qty) || 0;
+      } else {
+        displayQty = Math.max(0, (parseFloat(salesLine.ord_quant) || 0) - (parseFloat(salesLine.sup_quant) || 0));
+      }
+      cubic = parseFloat(stock.x_cubic) * displayQty;
     }
 
     return `<tr>
@@ -2073,7 +2110,7 @@ function renderJobs() {
       <td class="mono">${
         Number(j.iscomplete) === 4
           ? `<span style="color:var(--amber)" title="${remainingHours(j).toFixed(2)}h remaining">${j.completeqty || 0} <span style="color:var(--faint);font-size:10px;">of ${j.qty}</span></span>`
-          : Number(j.iscomplete) === 1 ? `<span style="color:var(--green)">${j.completeqty || j.qty}</span>` : '—'
+          : (Number(j.iscomplete) === 1 || Number(j.iscomplete) === 2) ? `<span style="color:var(--green)">${j.completeqty || j.qty}</span>` : '—'
       }</td>
       <td class="mono" style="font-size:11px;">${stockcode}</td>
       <td class="mono" style="font-size:11px;color:var(--muted);">${linkedCode}</td>
@@ -2508,8 +2545,8 @@ function renderDashBlockProduction(branches) {
   const el = document.getElementById('dash-block-prod');
   if (!el) return;
 
-  const allGrades = [...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))]
-    .filter(g => !(settings.excludedGrades||[]).includes(g)).sort();
+  const allGrades = orderedGrades([...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))]
+    .filter(g => !(settings.excludedGrades||[]).includes(g)).sort());
 
   if (!allGrades.length) {
     el.innerHTML = '<div class="mat-no-data">No grades configured — check Settings &gt; Grade Visibility.</div>';
@@ -2965,6 +3002,9 @@ async function loadBlockStockData() {
       safe(() => bsFetch('capacity_cell_highlights')),
       safe(() => bsFetch('block_auto_forecast')),
     ]);
+    // Also refresh branch overrides so per-branch grade visibility is current
+    // without needing to open Settings first.
+    await loadBranchOverrides();
     console.log(`Block stock loaded: ${blockStockEntries.length} entries, ${blockProduction.length} production, ${blockAdjustments.length} adjustments, ${blockProductionTemplate.length} template rows, ${cellHighlights.length} highlights, ${blockAutoForecastSettings.length} auto-forecast settings`);
   } catch(e) {
     console.error('loadBlockStockData failed:', e);
@@ -3084,7 +3124,7 @@ async function toggleCellHighlight(bn, grade, dateStr) {
 }
 
 // ── Stock calculation ─────────────────────────
-function calcBlockStock(branchNo, grade) {
+function calcBlockStock(branchNo, grade, { confirmedOnly = false } = {}) {
   const bn = Number(branchNo);
 
   // Latest opening entry for this branch+grade
@@ -3093,9 +3133,10 @@ function calcBlockStock(branchNo, grade) {
     .sort((a, b) => b.entry_date.localeCompare(a.entry_date));
   if (!entries.length) return null;
 
-  const base      = entries[0];
-  const baseDate  = base.entry_date;
-  const baseQty   = base.qty;
+  const base           = entries[0];
+  const baseDate       = base.entry_date;
+  const baseTimestamp  = base.entry_timestamp || null; // precise stocktake moment; null for legacy entries
+  const baseQty        = base.qty;
 
   // Production since base date.
   // For each work day from baseDate through today: use the actual entry if one
@@ -3113,7 +3154,10 @@ function calcBlockStock(branchNo, grade) {
     const actual = getActualProduction(bn, grade, dateStr);
     if (actual !== null) {
       produced += actual.qty;
-    } else {
+    } else if (!confirmedOnly) {
+      // Normal display mode: use template forecast as proxy for days where
+      // production happened but wasn't explicitly entered. Skip in confirmedOnly
+      // mode (stocktake variance) since template is a projection, not reality.
       produced += getTemplateQty(bn, grade, dateStr);
     }
   }
@@ -3143,8 +3187,25 @@ function calcBlockStock(branchNo, grade) {
   // rounding only belongs in the requirement/forecast totals shown to staff,
   // not in the underlying stock deduction itself.
   let usedCubic = 0;
+  // Determine the cutoff for "completed after stocktake" — if this stocktake
+  // has a precise timestamp, use it (ISO string comparisons work correctly for
+  // timestamptz values stored as UTC). Fall back to date-only comparison for
+  // legacy entries (backfilled to midnight NZT on migration).
+  const jobCompletedAfterBase = (j) => {
+    if (j.completime) {
+      // completime is now a full NZ-aware ISO timestamp in Supabase — compare
+      // directly against baseTimestamp (also UTC ISO). If no baseTimestamp
+      // (legacy entry), fall back to date prefix comparison.
+      return baseTimestamp
+        ? j.completime > baseTimestamp
+        : j.completime.slice(0, 10) >= baseDate;
+    }
+    // finishdate is still a plain date string — date-only comparison only
+    return (j.finishdate || '') >= baseDate;
+  };
+
   schedule
-    .filter(j => (Number(j.iscomplete) === 1 || Number(j.iscomplete) === 2) && (j.completime || j.finishdate) >= baseDate)
+    .filter(j => (Number(j.iscomplete) === 1 || Number(j.iscomplete) === 2) && jobCompletedAfterBase(j))
     .forEach(j => {
       const m = machineMap[Number(j.machineno)];
       if (!m || Number(m.branchno) !== bn) return;
@@ -3158,13 +3219,13 @@ function calcBlockStock(branchNo, grade) {
       // equals ord_quant making lineQty=0, which would contribute nothing to
       // usage — but the blocks were genuinely used, so we need the actual qty
       // produced. Fall back to j.qty (scheduled qty) if completeqty is absent.
-      const doneQty = parseFloat(j.completeqty) || parseFloat(j.qty) || 0;
+      const doneQty = Number(j.iscomplete) === 2 && parseFloat(sl.sup_quant) > 0 ? parseFloat(sl.sup_quant) : parseFloat(j.completeqty) || parseFloat(j.qty) || 0;
       usedCubic += parseFloat(stock.x_cubic) * Math.max(0, doneQty);
     });
   const usedBlocks = (blockM3 > 0 && wasteFac > 0) ? usedCubic / (blockM3 * wasteFac) : 0;
 
   const current = baseQty + produced + adjustments - usedBlocks;
-  return { baseQty, baseDate, produced, adjustments, usedBlocks, current };
+  return { baseQty, baseDate, baseTimestamp, produced, adjustments, usedBlocks, current };
 }
 
 // ── Auto-forecast engine ──────────────────────────────────────────────────
@@ -3334,7 +3395,77 @@ async function applyAutoForecastToTemplate(bn, grade, result) {
   }
 }
 
-// ── Forecast helpers ──────────────────────────
+// ── Grade order drag-to-reorder ──────────────────────────────────────────────
+let _gradeOrderDragSrc = null;
+
+function renderGradeOrderList() {
+  const el = document.getElementById('grade-order-list');
+  if (!el) return;
+  const allGrades = orderedGrades([...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))].sort());
+  if (!allGrades.length) {
+    el.innerHTML = '<div style="color:var(--faint);font-size:13px;">Grades appear here after data loads.</div>';
+    return;
+  }
+  el.innerHTML = `
+    <div id="grade-order-rows" style="display:flex;flex-direction:column;gap:4px;max-width:320px;">
+      ${allGrades.map(g => `
+        <div class="grade-order-row" draggable="true" data-grade="${g}"
+             style="display:flex;align-items:center;gap:10px;padding:7px 12px;background:var(--surface);border:1px solid var(--border);border-radius:6px;cursor:grab;user-select:none;">
+          <span style="color:var(--faint);font-size:14px;">⠿</span>
+          <span class="mono" style="font-size:12px;color:var(--faint);min-width:60px;">${g}</span>
+          <span style="font-size:13px;">${displayGrade(g) !== g ? displayGrade(g) : ''}</span>
+        </div>`).join('')}
+    </div>
+    <div style="margin-top:8px;font-size:11px;color:var(--faint);">Order saves automatically when you drop a grade.</div>`;
+
+  el.querySelectorAll('.grade-order-row').forEach(row => {
+    row.addEventListener('dragstart', e => {
+      _gradeOrderDragSrc = row;
+      e.dataTransfer.effectAllowed = 'move';
+      row.style.opacity = '0.4';
+    });
+    row.addEventListener('dragend', () => {
+      row.style.opacity = '1';
+      _gradeOrderDragSrc = null;
+    });
+    row.addEventListener('dragover', e => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      // Visual cue: highlight drop target
+      el.querySelectorAll('.grade-order-row').forEach(r => r.style.borderColor = 'var(--border)');
+      if (row !== _gradeOrderDragSrc) row.style.borderColor = 'var(--accent)';
+    });
+    row.addEventListener('dragleave', () => {
+      row.style.borderColor = 'var(--border)';
+    });
+    row.addEventListener('drop', e => {
+      e.preventDefault();
+      row.style.borderColor = 'var(--border)';
+      if (!_gradeOrderDragSrc || _gradeOrderDragSrc === row) return;
+      // Reorder in DOM
+      const container = document.getElementById('grade-order-rows');
+      const rows = [...container.querySelectorAll('.grade-order-row')];
+      const srcIdx = rows.indexOf(_gradeOrderDragSrc);
+      const tgtIdx = rows.indexOf(row);
+      if (srcIdx < tgtIdx) container.insertBefore(_gradeOrderDragSrc, row.nextSibling);
+      else container.insertBefore(_gradeOrderDragSrc, row);
+      // Save the new order
+      saveGradeOrder();
+    });
+  });
+}
+
+async function saveGradeOrder() {
+  const rows = document.querySelectorAll('#grade-order-rows .grade-order-row');
+  const newOrder = [...rows].map(r => r.dataset.grade);
+  settings.gradeOrder = newOrder;
+  await saveSettingsGlobal();
+  // Re-render pages that use grade order — silent so no loading flash
+  if (activePage === 'page-blockstock') renderBlockStock(true);
+  if (activePage === 'page-dashboard') renderDashboard(true);
+}
+
+
 // Get template qty for a branch+grade+date (0=Mon JS getDay maps differently)
 function getTemplateQty(bn, grade, dateStr) {
   const d   = new Date(dateStr + 'T00:00:00');
@@ -3434,7 +3565,7 @@ async function saveUnitTemplateRow(bn, productName, dow, qty) {
   return res.ok;
 }
 
-function calcUnitStock(branchNo, productName) {
+function calcUnitStock(branchNo, productName, { confirmedOnly = false } = {}) {
   const bn = Number(branchNo);
   const codes = getUnitProductCodes(productName);
   if (!codes.length) return null;
@@ -3444,9 +3575,10 @@ function calcUnitStock(branchNo, productName) {
     .sort((a, b) => b.entry_date.localeCompare(a.entry_date));
   if (!entries.length) return null;
 
-  const base     = entries[0];
-  const baseDate = base.entry_date;
-  const baseQty  = base.qty;
+  const base          = entries[0];
+  const baseDate      = base.entry_date;
+  const baseTimestamp = base.entry_timestamp || null;
+  const baseQty       = base.qty;
 
   // Production since base date — same day-by-day walk as calcBlockStock,
   // actual entry if present, else weekly template, through today inclusive.
@@ -3457,22 +3589,32 @@ function calcUnitStock(branchNo, productName) {
     if (dow > 4) continue;
     const dateStr = fmtDateLocal(d);
     const actual = getUnitActualProduction(bn, productName, dateStr);
-    produced += actual !== null ? actual.qty : getUnitTemplateQty(bn, productName, dateStr);
+    if (actual !== null) {
+      produced += actual.qty;
+    } else if (!confirmedOnly) {
+      produced += getUnitTemplateQty(bn, productName, dateStr);
+    }
   }
 
   const adjustments = unitAdjustments
     .filter(a => Number(a.branch_no) === bn && a.product_name === productName && a.adjustment_date >= baseDate)
     .reduce((s, a) => s + (a.qty || 0), 0);
 
-  // Completed jobs since base date — units used. Matched via LINKED_STOCKCODE
-  // on the sales line (not x_grade — pod sizes share grade SL-12, so codes
-  // are the only way to tell 220mm from 300mm apart). No cubic conversion —
-  // the sales line's outstanding quantity IS the unit count directly.
+  // Completed jobs since base — same timestamp-aware comparison as calcBlockStock
+  const jobCompletedAfterBase = (j) => {
+    if (j.completime) {
+      return baseTimestamp
+        ? j.completime > baseTimestamp
+        : j.completime.slice(0, 10) >= baseDate;
+    }
+    return (j.finishdate || '') >= baseDate;
+  };
+
   const slMap      = Object.fromEntries(salesLines.map(l => [Number(l.solineid), l]));
   const machineMap = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
   let usedUnits = 0;
   schedule
-    .filter(j => (Number(j.iscomplete) === 1 || Number(j.iscomplete) === 2) && (j.completime || j.finishdate) >= baseDate)
+    .filter(j => (Number(j.iscomplete) === 1 || Number(j.iscomplete) === 2) && jobCompletedAfterBase(j))
     .forEach(j => {
       const m = machineMap[Number(j.machineno)];
       if (!m || Number(m.branchno) !== bn) return;
@@ -3481,20 +3623,20 @@ function calcUnitStock(branchNo, productName) {
       // Use completeqty (actual units produced) for completed jobs — same
       // reasoning as calcBlockStock: for fully supplied orders, ord_quant -
       // sup_quant = 0, making lineQty=0 and contributing nothing to usage.
-      const doneQty = parseFloat(j.completeqty) || parseFloat(j.qty) || 0;
+      const doneQty = Number(j.iscomplete) === 2 && parseFloat(sl.sup_quant) > 0 ? parseFloat(sl.sup_quant) : parseFloat(j.completeqty) || parseFloat(j.qty) || 0;
       usedUnits += Math.max(0, doneQty);
     });
 
   const current = baseQty + produced + adjustments - usedUnits;
-  return { baseQty, baseDate, produced, adjustments, usedBlocks: usedUnits, current };
+  return { baseQty, baseDate, baseTimestamp, produced, adjustments, usedBlocks: usedUnits, current };
 }
 
 // ── Grade multiselect dropdown ────────────────
 function buildGradeDropdown() {
   // Only show grades enabled in settings
   const settingsExcluded = new Set(settings.excludedGrades || []);
-  const allGrades = [...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))]
-    .filter(g => !settingsExcluded.has(g)).sort();
+  const allGrades = orderedGrades([...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))]
+    .filter(g => !settingsExcluded.has(g)).sort());
   const items = document.getElementById('grade-ms-items');
   if (!items) return;
   items.innerHTML = allGrades.map(g => `
@@ -3582,9 +3724,15 @@ async function renderBlockStock(silent) {
   buildGradeDropdown();
 
   const branchFilter = globalBranch;
-  const allGradesRaw = [...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))].sort();
+  const allGradesRaw = orderedGrades([...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))].sort());
   const settingsExcluded = new Set(settings.excludedGrades || []);
-  const enabledGrades = allGradesRaw.filter(g => !settingsExcluded.has(g));
+  // When a specific branch is selected, also apply that branch's per-branch
+  // grade visibility overrides (set in Settings → Branch Overrides). When
+  // "all branches" is shown, only the global grade visibility applies.
+  const branchExcluded = branchFilter !== 'all'
+    ? new Set((branchOverridesCache[parseInt(branchFilter)] || {}).excludedGrades || [])
+    : new Set();
+  const enabledGrades = allGradesRaw.filter(g => !settingsExcluded.has(g) && !branchExcluded.has(g));
   const allGrades = bsSelectedGrades.has('__none__') ? []
     : bsSelectedGrades.size > 0 ? enabledGrades.filter(g => bsSelectedGrades.has(g))
     : enabledGrades;
@@ -3827,30 +3975,35 @@ async function renderBlockStock(silent) {
               ${(() => {
                 const history = [
                   ...blockStockEntries.filter(e=>Number(e.branch_no)===bn&&e.grade===grade)
-                    .map(e=>({date:e.entry_date,type:'opening',qty:e.qty,note:e.notes||'Opening count',id:e.id,table:'block_stock_entries'})),
+                    .map(e=>({date:e.entry_date,timestamp:e.entry_timestamp||null,type:'opening',qty:e.qty,note:e.notes||'Opening count',id:e.id,table:'block_stock_entries'})),
                   ...blockProduction.filter(p=>Number(p.branch_no)===bn&&p.grade===grade&&
                       !(p.notes==='Forecast override' && p.production_date>todayLocal()))
-                    .map(p=>({date:p.production_date,type:'produced',qty:p.qty,note:p.notes||'Production',id:p.id,table:'block_production'})),
+                    .map(p=>({date:p.production_date,timestamp:p.created_at||null,type:'produced',qty:p.qty,note:p.notes||'Production',id:p.id,table:'block_production'})),
                   ...blockAdjustments.filter(a=>Number(a.branch_no)===bn&&a.grade===grade)
-                    .map(a=>({date:a.adjustment_date,type:'adjust',qty:a.qty,note:a.reason||'Adjustment',id:a.id,table:'block_adjustments'})),
-                  ...schedule.filter(j=>( Number(j.iscomplete)===1||Number(j.iscomplete)===2)&&stock&&(j.completime||j.finishdate)>=stock.baseDate).flatMap(j=>{
+                    .map(a=>({date:a.adjustment_date,timestamp:a.created_at||null,type:'adjust',qty:a.qty,note:a.reason||'Adjustment',id:a.id,table:'block_adjustments'})),
+                  ...schedule.filter(j=>( Number(j.iscomplete)===1||Number(j.iscomplete)===2)&&stock&&(j.completime ? (stock.baseTimestamp ? j.completime > stock.baseTimestamp : j.completime.slice(0,10) >= stock.baseDate) : (j.finishdate||'') >= stock.baseDate)).flatMap(j=>{
                     const m=mMap[Number(j.machineno)];
                     if(!m||Number(m.branchno)!==bn) return [];
                     const sl=slMap[Number(j.line_seqno)]; if(!sl) return [];
                     const st=stMap[sl.stockcode];
                     if(!st||(st.x_grade||'').trim()!==grade||!parseFloat(st.x_cubic)||blockM3===0||wasteFac<=0) return [];
-                    const doneQty=(parseFloat(j.completeqty)||parseFloat(j.qty)||0);
+                    const doneQty=Number(j.iscomplete)===2&&parseFloat(sl.sup_quant)>0?parseFloat(sl.sup_quant):(parseFloat(j.completeqty)||parseFloat(j.qty)||0);
                     const bl=parseFloat(st.x_cubic)*Math.max(0,doneQty)/(blockM3*wasteFac);
-                    return bl>0?[{date:j.completime||j.finishdate,type:'used',qty:-bl,note:`Job #${sl.hdr_seqno} — ${sl.stockcode}`,id:null,table:null}]:[];
+                    return bl>0?[{date:j.completime||j.finishdate,timestamp:j.completime||null,type:'used',qty:-bl,note:`Job #${sl.hdr_seqno} — ${sl.stockcode}`,id:null,table:null}]:[];
                   }),
                 ].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,20);
 
                 const typeMap={opening:'Opening',produced:'Produced',used:'Used (job)',adjust:'Adjustment'};
                 const clsMap ={opening:'bs-type-opening',produced:'bs-type-produced',used:'bs-type-used',adjust:'bs-type-adjust'};
+                const fmtTs = ts => {
+                  if (!ts) return '';
+                  const d = new Date(ts);
+                  return d.toLocaleTimeString('en-NZ', {hour:'2-digit', minute:'2-digit', hour12:false, timeZone:'Pacific/Auckland'});
+                };
 
                 return history.map(h=>`
                   <div class="bs-history-row">
-                    <span class="mono" style="font-size:11px;">${fmtShort(h.date)}</span>
+                    <span class="mono" style="font-size:11px;">${fmtShort(h.date)}${h.timestamp ? `<span style="color:var(--faint);font-size:10px;"> ${fmtTs(h.timestamp)}</span>` : ''}</span>
                     <span class="bs-type-badge ${clsMap[h.type]}">${typeMap[h.type]}</span>
                     <span class="td-muted" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${h.note}">${h.note}</span>
                     <span class="mono" style="text-align:right;color:${h.qty>=0?'var(--green)':'var(--red)'};">${h.qty>=0?'+':''}${h.type==='used'?h.qty.toFixed(1):h.qty}</span>
@@ -4120,12 +4273,12 @@ async function renderUnitProducts(silent) {
                     .map(p=>({date:p.production_date,type:'produced',qty:p.qty,note:p.notes||'Production',id:p.id,table:'unit_production'})),
                   ...unitAdjustments.filter(a=>Number(a.branch_no)===bn&&a.product_name===productName)
                     .map(a=>({date:a.adjustment_date,type:'adjust',qty:a.qty,note:a.reason||'Adjustment',id:a.id,table:'unit_adjustments'})),
-                  ...schedule.filter(j=>( Number(j.iscomplete)===1||Number(j.iscomplete)===2)&&stock&&(j.completime||j.finishdate)>=stock.baseDate).flatMap(j=>{
+                  ...schedule.filter(j=>( Number(j.iscomplete)===1||Number(j.iscomplete)===2)&&stock&&(j.completime ? (stock.baseTimestamp ? j.completime > stock.baseTimestamp : j.completime.slice(0,10) >= stock.baseDate) : (j.finishdate||'') >= stock.baseDate)).flatMap(j=>{
                     const m=mMap[Number(j.machineno)];
                     if(!m||Number(m.branchno)!==bn) return [];
                     const sl=slMap[Number(j.line_seqno)]; if(!sl) return [];
                     if(!codes.includes((sl.linked_stockcode||'').trim())) return [];
-                    const doneQty=(parseFloat(j.completeqty)||parseFloat(j.qty)||0);
+                    const doneQty=Number(j.iscomplete)===2&&parseFloat(sl.sup_quant)>0?parseFloat(sl.sup_quant):(parseFloat(j.completeqty)||parseFloat(j.qty)||0);
                     const units=Math.max(0,doneQty);
                     return units>0?[{date:j.completime||j.finishdate,type:'used',qty:-units,note:`Job #${sl.hdr_seqno} — ${sl.stockcode}`,id:null,table:null}]:[];
                   }),
@@ -4210,8 +4363,8 @@ async function renderAnalytics() {
   const slMap    = Object.fromEntries(salesLines.map(l => [Number(l.solineid), l]));
   const mMap     = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
 
-  const allGrades = [...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))]
-    .filter(g => !(settings.excludedGrades||[]).includes(g)).sort();
+  const allGrades = orderedGrades([...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))]
+    .filter(g => !(settings.excludedGrades||[]).includes(g)).sort());
   const unitProducts = (settings.unitProducts || []).filter(p => p.name && p.codes && p.codes.length);
 
   // Unit product data isn't loaded by default the way block stock data is —
@@ -4560,7 +4713,7 @@ async function saveModal() {
     if (_modalData.mode === 'unit_opening') {
       let varianceNote = '';
       if (dt <= todayLocal()) {
-        const priorStock = calcUnitStock(bn, productName);
+        const priorStock = calcUnitStock(bn, productName, { confirmedOnly: true });
         if (priorStock) {
           const variance = qty - Math.round(priorStock.current);
           if (variance !== 0) varianceNote = ` (variance ${variance > 0 ? '+' : ''}${variance} vs system: was ${Math.round(priorStock.current)})`;
@@ -4608,7 +4761,10 @@ async function saveModal() {
     // variance = (current calculated stock just before this stocktake) - (new counted qty)
     let varianceNote = '';
     if (dt <= todayLocal()) {
-      const priorStock = calcBlockStock(bn, grade);
+      // Use confirmedOnly mode: only count actual entered production entries,
+      // not template forecasts — a stocktake variance should compare the
+      // physical count against confirmed reality, not projected production.
+      const priorStock = calcBlockStock(bn, grade, { confirmedOnly: true });
       if (priorStock) {
         const variance = qty - Math.round(priorStock.current);
         if (variance !== 0) {
@@ -4618,7 +4774,11 @@ async function saveModal() {
     }
     const fullNotes = (notes || 'Opening count') + varianceNote;
 
-    ok = await bsInsert('block_stock_entries', { branch_no:bn, grade, entry_date:dt, qty, notes: fullNotes });
+    ok = await bsInsert('block_stock_entries', {
+      branch_no: bn, grade, entry_date: dt,
+      entry_timestamp: new Date().toISOString(), // precise NZ moment → UTC for comparison with completime
+      qty, notes: fullNotes
+    });
     // Stocktake reset: the new count becomes the base AS OF the stocktake date.
     // Only clear entries UP TO AND INCLUDING that date (they're now superseded by
     // the physical count) — entries AFTER the stocktake date (e.g. production that
@@ -4846,7 +5006,8 @@ function renderSettings() {
   }).join('') || '<div style="color:var(--faint);font-size:13px;">Load data first.</div>';
 
   // Grade names — let staff rename ERP grade codes to something recognisable
-  const allGrades = [...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))].sort();
+  const allGrades = orderedGrades([...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))].sort());
+  renderGradeOrderList();
   document.getElementById('grade-names-list').innerHTML = allGrades.length
     ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;">
         ${allGrades.map(g => `
