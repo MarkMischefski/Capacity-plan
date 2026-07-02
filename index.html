@@ -852,7 +852,7 @@ function calcBlockStock(branchNo, grade) {
       const stock = stockMap[sl.stockcode];
       if (!stock || (stock.x_grade || '').trim() !== grade) return;
       if (!parseFloat(stock.x_cubic) || blockM3 === 0 || wasteFac <= 0) return;
-      const doneQty = parseFloat(j.completeqty) || parseFloat(j.qty) || 0;
+      const doneQty = Number(j.iscomplete) === 2 && parseFloat(sl.sup_quant) > 0 ? parseFloat(sl.sup_quant) : parseFloat(j.completeqty) || parseFloat(j.qty) || 0;
       usedCubic += parseFloat(stock.x_cubic) * Math.max(0, doneQty);
     });
   const usedBlocks = (blockM3 > 0 && wasteFac > 0) ? usedCubic / (blockM3 * wasteFac) : 0;
@@ -949,7 +949,7 @@ function calcUnitStock(branchNo, productName) {
       if (!m || Number(m.branchno) !== bn) return;
       const sl = slMap[Number(j.line_seqno)];
       if (!sl || !codes.includes((sl.linked_stockcode||'').trim())) return;
-      const doneQty = parseFloat(j.completeqty) || parseFloat(j.qty) || 0;
+      const doneQty = Number(j.iscomplete) === 2 && parseFloat(sl.sup_quant) > 0 ? parseFloat(sl.sup_quant) : parseFloat(j.completeqty) || parseFloat(j.qty) || 0;
       usedUnits += Math.max(0, doneQty);
     });
 
