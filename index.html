@@ -677,7 +677,7 @@ async function loadAllData() {
       sbFetch('block_production'),
       sbFetch('block_adjustments'),
       sbFetch('block_production_template'),
-      sbFetch('capacity_schedule', '&iscomplete=in.(0,1,4)'),
+      sbFetch('capacity_schedule', '&iscomplete=in.(0,1,2,4)'),
       sbFetch('capacity_sales_lines'),
       sbFetch('capacity_machines'),
       sbFetch('capacity_app_settings', '&id=eq.1'),
@@ -801,7 +801,7 @@ function gradeHasRequirement(bn, grade) {
     const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
     const st = stMap[sl.stockcode];
     if (!st || (st.x_grade||'').trim() !== grade || !parseFloat(st.x_cubic)) return;
-    const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
+    const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
     cubic += parseFloat(st.x_cubic) * Math.max(0, lq);
   });
   return cubic > 0;
@@ -843,7 +843,7 @@ function calcBlockStock(branchNo, grade) {
   // end — not per job — to match desktop's calculation exactly.
   let usedCubic = 0;
   schedule
-    .filter(j => Number(j.iscomplete) === 1 && (j.completime || j.finishdate) >= baseDate)
+    .filter(j => (Number(j.iscomplete) === 1 || Number(j.iscomplete) === 2) && (j.completime || j.finishdate) >= baseDate)
     .forEach(j => {
       const m = machineMap[Number(j.machineno)];
       if (!m || Number(m.branchno) !== bn) return;
@@ -852,8 +852,8 @@ function calcBlockStock(branchNo, grade) {
       const stock = stockMap[sl.stockcode];
       if (!stock || (stock.x_grade || '').trim() !== grade) return;
       if (!parseFloat(stock.x_cubic) || blockM3 === 0 || wasteFac <= 0) return;
-      const lineQty = (parseFloat(sl.ord_quant) || 0) - (parseFloat(sl.bkord_quant) || 0) - (parseFloat(sl.sup_quant) || 0);
-      usedCubic += parseFloat(stock.x_cubic) * Math.max(0, lineQty);
+      const doneQty = parseFloat(j.completeqty) || parseFloat(j.qty) || 0;
+      usedCubic += parseFloat(stock.x_cubic) * Math.max(0, doneQty);
     });
   const usedBlocks = (blockM3 > 0 && wasteFac > 0) ? usedCubic / (blockM3 * wasteFac) : 0;
 
@@ -905,7 +905,7 @@ function unitProductHasRequirement(bn, productName) {
     if (!m || Number(m.branchno) !== bn) return;
     const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
     if (!codes.includes((sl.linked_stockcode||'').trim())) return;
-    const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
+    const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
     units += Math.max(0, lq);
   });
   return units > 0;
@@ -943,14 +943,14 @@ function calcUnitStock(branchNo, productName) {
   const machineMap = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
   let usedUnits = 0;
   schedule
-    .filter(j => Number(j.iscomplete) === 1 && (j.completime || j.finishdate) >= baseDate)
+    .filter(j => (Number(j.iscomplete) === 1 || Number(j.iscomplete) === 2) && (j.completime || j.finishdate) >= baseDate)
     .forEach(j => {
       const m = machineMap[Number(j.machineno)];
       if (!m || Number(m.branchno) !== bn) return;
       const sl = slMap[Number(j.line_seqno)];
       if (!sl || !codes.includes((sl.linked_stockcode||'').trim())) return;
-      const lineQty = (parseFloat(sl.ord_quant) || 0) - (parseFloat(sl.bkord_quant) || 0) - (parseFloat(sl.sup_quant) || 0);
-      usedUnits += Math.max(0, lineQty);
+      const doneQty = parseFloat(j.completeqty) || parseFloat(j.qty) || 0;
+      usedUnits += Math.max(0, doneQty);
     });
 
   const current = baseQty + produced + adjustments - usedUnits;
@@ -1100,7 +1100,7 @@ function renderContent() {
         if (!m || Number(m.branchno) !== bn) return;
         const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
         if (!codes.includes((sl.linked_stockcode||'').trim())) return;
-        const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
+        const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
         units += Math.max(0, lq);
       });
       required = Math.round(units);
@@ -1122,7 +1122,7 @@ function renderContent() {
         const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
         const st = stMap[sl.stockcode];
         if (!st || (st.x_grade||'').trim() !== key || !parseFloat(st.x_cubic)) return;
-        const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.bkord_quant)||0)-(parseFloat(sl.sup_quant)||0);
+        const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
         cubic += parseFloat(st.x_cubic) * Math.max(0, lq);
       });
       required = (blockM3>0 && wasteFac>0 && cubic>0) ? Math.ceil(cubic/(blockM3*wasteFac)) : 0;
