@@ -699,6 +699,7 @@ async function loadAllData() {
       settings.gradeNames     = shared.gradeNames      || {};
       settings.branchMaterial = shared.branchMaterial  || {};
       settings.unitProducts   = shared.unitProducts    || [];
+      settings.gradeOrder     = shared.gradeOrder      || [];
     }
 
     // This device's branch may have its own override (set via the main
@@ -733,6 +734,17 @@ function displayGrade(g) {
 }
 function branchName(bn) {
   return (settings.branchNames && settings.branchNames[bn]) || `Branch ${bn}`;
+}
+function orderedGrades(grades) {
+  const order = settings.gradeOrder || [];
+  if (!order.length) return grades;
+  const orderMap = Object.fromEntries(order.map((g, i) => [g, i]));
+  return [...grades].sort((a, b) => {
+    const ai = orderMap[a] ?? Infinity;
+    const bi = orderMap[b] ?? Infinity;
+    if (ai !== bi) return ai - bi;
+    return grades.indexOf(a) - grades.indexOf(b);
+  });
 }
 
 // ══════════════════════════════════════════════
@@ -816,6 +828,7 @@ function calcBlockStock(branchNo, grade) {
 
   const base = entries[0];
   const baseDate = base.entry_date;
+  const baseTimestamp = base.entry_timestamp || null;
   const baseQty = base.qty;
 
   const todayStr = todayLocal();
@@ -839,11 +852,18 @@ function calcBlockStock(branchNo, grade) {
   const slMap = Object.fromEntries(salesLines.map(l => [Number(l.solineid), l]));
   const machineMap = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
 
-  // Sum raw cubic across ALL completed jobs first, round to blocks ONCE at the
-  // end — not per job — to match desktop's calculation exactly.
+  const jobCompletedAfterBase = (j) => {
+    if (j.completime) {
+      return baseTimestamp
+        ? j.completime > baseTimestamp
+        : j.completime.slice(0, 10) >= baseDate;
+    }
+    return (j.finishdate || '') >= baseDate;
+  };
+
   let usedCubic = 0;
   schedule
-    .filter(j => (Number(j.iscomplete) === 1 || Number(j.iscomplete) === 2) && (j.completime || j.finishdate) >= baseDate)
+    .filter(j => (Number(j.iscomplete) === 1 || Number(j.iscomplete) === 2) && jobCompletedAfterBase(j))
     .forEach(j => {
       const m = machineMap[Number(j.machineno)];
       if (!m || Number(m.branchno) !== bn) return;
@@ -923,6 +943,7 @@ function calcUnitStock(branchNo, productName) {
 
   const base = entries[0];
   const baseDate = base.entry_date;
+  const baseTimestamp = base.entry_timestamp || null;
   const baseQty = base.qty;
 
   const todayStr = todayLocal();
@@ -939,11 +960,20 @@ function calcUnitStock(branchNo, productName) {
     .filter(a => Number(a.branch_no) === bn && a.product_name === productName && a.adjustment_date >= baseDate)
     .reduce((s, a) => s + (a.qty || 0), 0);
 
+  const jobCompletedAfterBase = (j) => {
+    if (j.completime) {
+      return baseTimestamp
+        ? j.completime > baseTimestamp
+        : j.completime.slice(0, 10) >= baseDate;
+    }
+    return (j.finishdate || '') >= baseDate;
+  };
+
   const slMap = Object.fromEntries(salesLines.map(l => [Number(l.solineid), l]));
   const machineMap = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
   let usedUnits = 0;
   schedule
-    .filter(j => (Number(j.iscomplete) === 1 || Number(j.iscomplete) === 2) && (j.completime || j.finishdate) >= baseDate)
+    .filter(j => (Number(j.iscomplete) === 1 || Number(j.iscomplete) === 2) && jobCompletedAfterBase(j))
     .forEach(j => {
       const m = machineMap[Number(j.machineno)];
       if (!m || Number(m.branchno) !== bn) return;
@@ -964,7 +994,7 @@ function calcUnitStock(branchNo, productName) {
 // for a branch, applying the same "tracked stock OR current requirement"
 // visibility rule used everywhere. { type, key, label } per item.
 function getVisibleItems(bn) {
-  const allGradesRaw = [...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))].sort();
+  const allGradesRaw = orderedGrades([...new Set(stockItems.map(s => (s.x_grade||'').trim()).filter(Boolean))].sort());
   const excluded = new Set(settings.excludedGrades || []);
   const grades = allGradesRaw.filter(g => {
     if (excluded.has(g)) return false;
