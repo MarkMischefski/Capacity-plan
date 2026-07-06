@@ -1627,10 +1627,15 @@ function fmtDate(d) {
 
 // Timezone-safe: formats using local date parts so NZ+12 doesn't roll back to yesterday
 function fmtDateLocal(d) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+  // Explicitly use NZ timezone so dates are correct regardless of what
+  // timezone the browser/OS is set to. Using getDate()/getMonth()/getFullYear()
+  // returns browser-local dates, which on a UTC or non-NZ machine gives wrong
+  // dates for timestamps that straddle NZ midnight (e.g. a job completing at
+  // 00:35 NZT has UTC date of the previous day — getDate() returns yesterday).
+  return d.toLocaleDateString('en-NZ', {
+    timeZone: 'Pacific/Auckland',
+    year: 'numeric', month: '2-digit', day: '2-digit'
+  }).split('/').reverse().join('-');
 }
 
 function fmtShort(s) {
@@ -3148,16 +3153,13 @@ function calcBlockStock(branchNo, grade, { confirmedOnly = false } = {}) {
   const todayStr = todayLocal();
   let produced = 0;
   for (let d = new Date(baseDate + 'T00:00:00'); fmtDateLocal(d) <= todayStr; d.setDate(d.getDate() + 1)) {
-    const dow = (d.getDay() + 6) % 7; // Mon=0..Sun=6
-    if (dow > 4) continue; // skip Sat/Sun — no weekday production expected
+    const dow = (d.getDay() + 6) % 7;
+    if (dow > 4) continue;
     const dateStr = fmtDateLocal(d);
     const actual = getActualProduction(bn, grade, dateStr);
     if (actual !== null) {
       produced += actual.qty;
-    } else if (!confirmedOnly) {
-      // Normal display mode: use template forecast as proxy for days where
-      // production happened but wasn't explicitly entered. Skip in confirmedOnly
-      // mode (stocktake variance) since template is a projection, not reality.
+    } else if (!confirmedOnly && dateStr !== todayStr) {
       produced += getTemplateQty(bn, grade, dateStr);
     }
   }
@@ -3591,7 +3593,7 @@ function calcUnitStock(branchNo, productName, { confirmedOnly = false } = {}) {
     const actual = getUnitActualProduction(bn, productName, dateStr);
     if (actual !== null) {
       produced += actual.qty;
-    } else if (!confirmedOnly) {
+    } else if (!confirmedOnly && dateStr !== todayStr) {
       produced += getUnitTemplateQty(bn, productName, dateStr);
     }
   }
@@ -3981,7 +3983,7 @@ async function renderBlockStock(silent) {
                     .map(p=>({date:p.production_date,timestamp:p.created_at||null,type:'produced',qty:p.qty,note:p.notes||'Production',id:p.id,table:'block_production'})),
                   ...blockAdjustments.filter(a=>Number(a.branch_no)===bn&&a.grade===grade)
                     .map(a=>({date:a.adjustment_date,timestamp:a.created_at||null,type:'adjust',qty:a.qty,note:a.reason||'Adjustment',id:a.id,table:'block_adjustments'})),
-                  ...schedule.filter(j=>( Number(j.iscomplete)===1||Number(j.iscomplete)===2)&&stock&&(j.completime ? (stock.baseTimestamp ? j.completime > stock.baseTimestamp : j.completime.slice(0,10) >= stock.baseDate) : (j.finishdate||'') >= stock.baseDate)).flatMap(j=>{
+                  ...schedule.filter(j=>( Number(j.iscomplete)===1||Number(j.iscomplete)===2)&&stock&&(j.completime ? (stock.baseTimestamp ? j.completime > stock.baseTimestamp : fmtDateLocal(new Date(j.completime)) >= stock.baseDate) : (j.finishdate||'') >= stock.baseDate)).flatMap(j=>{
                     const m=mMap[Number(j.machineno)];
                     if(!m||Number(m.branchno)!==bn) return [];
                     const sl=slMap[Number(j.line_seqno)]; if(!sl) return [];
@@ -3989,9 +3991,20 @@ async function renderBlockStock(silent) {
                     if(!st||(st.x_grade||'').trim()!==grade||!parseFloat(st.x_cubic)||blockM3===0||wasteFac<=0) return [];
                     const doneQty=Number(j.iscomplete)===2&&parseFloat(sl.sup_quant)>0?parseFloat(sl.sup_quant):(parseFloat(j.completeqty)||parseFloat(j.qty)||0);
                     const bl=parseFloat(st.x_cubic)*Math.max(0,doneQty)/(blockM3*wasteFac);
-                    return bl>0?[{date:j.completime||j.finishdate,timestamp:j.completime||null,type:'used',qty:-bl,note:`Job #${sl.hdr_seqno} — ${sl.stockcode}`,id:null,table:null}]:[];
+                    const ts=j.completime||null;
+                    // sortDate: always a plain YYYY-MM-DD so mixed timestamp/date strings sort consistently
+                    const sortDate=ts?fmtDateLocal(new Date(ts)):(j.finishdate||'');
+                    return bl>0?[{date:sortDate,timestamp:ts,type:'used',qty:-bl,note:`Job #${sl.hdr_seqno} — ${sl.stockcode}`,id:null,table:null}]:[];
                   }),
-                ].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,20);
+                ].sort((a,b)=>{
+                  // Sort by date desc; within same date, sort by timestamp desc (nulls last)
+                  const dc = b.date.localeCompare(a.date);
+                  if (dc !== 0) return dc;
+                  if (a.timestamp && b.timestamp) return b.timestamp.localeCompare(a.timestamp);
+                  if (a.timestamp) return -1;
+                  if (b.timestamp) return 1;
+                  return 0;
+                }).slice(0,20);
 
                 const typeMap={opening:'Opening',produced:'Produced',used:'Used (job)',adjust:'Adjustment'};
                 const clsMap ={opening:'bs-type-opening',produced:'bs-type-produced',used:'bs-type-used',adjust:'bs-type-adjust'};
@@ -4267,29 +4280,43 @@ async function renderUnitProducts(silent) {
               ${(() => {
                 const history = [
                   ...unitStockEntries.filter(e=>Number(e.branch_no)===bn&&e.product_name===productName)
-                    .map(e=>({date:e.entry_date,type:'opening',qty:e.qty,note:e.notes||'Opening count',id:e.id,table:'unit_stock_entries'})),
+                    .map(e=>({date:e.entry_date,timestamp:e.entry_timestamp||null,type:'opening',qty:e.qty,note:e.notes||'Opening count',id:e.id,table:'unit_stock_entries'})),
                   ...unitProduction.filter(p=>Number(p.branch_no)===bn&&p.product_name===productName&&
                       !(p.notes==='Forecast override' && p.production_date>todayLocal()))
-                    .map(p=>({date:p.production_date,type:'produced',qty:p.qty,note:p.notes||'Production',id:p.id,table:'unit_production'})),
+                    .map(p=>({date:p.production_date,timestamp:p.created_at||null,type:'produced',qty:p.qty,note:p.notes||'Production',id:p.id,table:'unit_production'})),
                   ...unitAdjustments.filter(a=>Number(a.branch_no)===bn&&a.product_name===productName)
-                    .map(a=>({date:a.adjustment_date,type:'adjust',qty:a.qty,note:a.reason||'Adjustment',id:a.id,table:'unit_adjustments'})),
-                  ...schedule.filter(j=>( Number(j.iscomplete)===1||Number(j.iscomplete)===2)&&stock&&(j.completime ? (stock.baseTimestamp ? j.completime > stock.baseTimestamp : j.completime.slice(0,10) >= stock.baseDate) : (j.finishdate||'') >= stock.baseDate)).flatMap(j=>{
+                    .map(a=>({date:a.adjustment_date,timestamp:a.created_at||null,type:'adjust',qty:a.qty,note:a.reason||'Adjustment',id:a.id,table:'unit_adjustments'})),
+                  ...schedule.filter(j=>( Number(j.iscomplete)===1||Number(j.iscomplete)===2)&&stock&&(j.completime ? (stock.baseTimestamp ? j.completime > stock.baseTimestamp : fmtDateLocal(new Date(j.completime)) >= stock.baseDate) : (j.finishdate||'') >= stock.baseDate)).flatMap(j=>{
                     const m=mMap[Number(j.machineno)];
                     if(!m||Number(m.branchno)!==bn) return [];
                     const sl=slMap[Number(j.line_seqno)]; if(!sl) return [];
                     if(!codes.includes((sl.linked_stockcode||'').trim())) return [];
                     const doneQty=Number(j.iscomplete)===2&&parseFloat(sl.sup_quant)>0?parseFloat(sl.sup_quant):(parseFloat(j.completeqty)||parseFloat(j.qty)||0);
                     const units=Math.max(0,doneQty);
-                    return units>0?[{date:j.completime||j.finishdate,type:'used',qty:-units,note:`Job #${sl.hdr_seqno} — ${sl.stockcode}`,id:null,table:null}]:[];
+                    const ts=j.completime||null;
+                    const sortDate=ts?fmtDateLocal(new Date(ts)):(j.finishdate||'');
+                    return units>0?[{date:sortDate,timestamp:ts,type:'used',qty:-units,note:`Job #${sl.hdr_seqno} — ${sl.stockcode}`,id:null,table:null}]:[];
                   }),
-                ].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,20);
+                ].sort((a,b)=>{
+                  const dc=b.date.localeCompare(a.date);
+                  if(dc!==0) return dc;
+                  if(a.timestamp&&b.timestamp) return b.timestamp.localeCompare(a.timestamp);
+                  if(a.timestamp) return -1;
+                  if(b.timestamp) return 1;
+                  return 0;
+                }).slice(0,20);
 
                 const typeMap={opening:'Opening',produced:'Produced',used:'Used (job)',adjust:'Adjustment'};
                 const clsMap ={opening:'bs-type-opening',produced:'bs-type-produced',used:'bs-type-used',adjust:'bs-type-adjust'};
+                const fmtTs = ts => {
+                  if (!ts) return '';
+                  const d = new Date(ts);
+                  return d.toLocaleTimeString('en-NZ', {hour:'2-digit', minute:'2-digit', hour12:false, timeZone:'Pacific/Auckland'});
+                };
 
                 return history.map(h=>`
                   <div class="bs-history-row">
-                    <span class="mono" style="font-size:11px;">${fmtShort(h.date)}</span>
+                    <span class="mono" style="font-size:11px;">${fmtShort(h.date)}${h.timestamp ? `<span style="color:var(--faint);font-size:10px;"> ${fmtTs(h.timestamp)}</span>` : ''}</span>
                     <span class="bs-type-badge ${clsMap[h.type]}">${typeMap[h.type]}</span>
                     <span class="td-muted" style="font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${h.note}">${h.note}</span>
                     <span class="mono" style="text-align:right;color:${h.qty>=0?'var(--green)':'var(--red)'};">${h.qty>=0?'+':''}${h.qty}</span>
@@ -4719,7 +4746,7 @@ async function saveModal() {
           if (variance !== 0) varianceNote = ` (variance ${variance > 0 ? '+' : ''}${variance} vs system: was ${Math.round(priorStock.current)})`;
         }
       }
-      ok = await bsInsert('unit_stock_entries', { branch_no:bn, product_name:productName, entry_date:dt, qty, notes: (notes || 'Opening count') + varianceNote });
+      ok = await bsInsert('unit_stock_entries', { branch_no:bn, product_name:productName, entry_date:dt, entry_timestamp: new Date().toISOString(), qty, notes: (notes || 'Opening count') + varianceNote });
       if (ok && dt <= todayLocal()) {
         const prodToDelete = unitProduction.filter(p => Number(p.branch_no)===bn && p.product_name===productName && p.production_date<=dt);
         const adjToDelete  = unitAdjustments.filter(a => Number(a.branch_no)===bn && a.product_name===productName && a.adjustment_date<=dt);
@@ -5160,6 +5187,16 @@ async function init() {
         if (activePage === 'page-utilisation') renderMachineCapacityPage();
         if (activePage === 'page-jobs')        renderJobs();
         if (activePage === 'page-dashboard')   renderDashboard();
+        if (activePage === 'page-blockstock') {
+          // Re-fetch block stock data too — schedule completime values update
+          // as jobs complete, which directly affects the current stock figure.
+          await loadBlockStockData();
+          renderBlockStock(true);
+        }
+        if (activePage === 'page-unitproducts') {
+          await loadUnitProductsData();
+          renderUnitProducts(true);
+        }
       }
     }, settings.refreshInterval * 60 * 1000);
   }
