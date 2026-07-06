@@ -595,8 +595,10 @@ let unitProductionTemplate = [];
 // DATE HELPERS (ported from desktop app)
 // ══════════════════════════════════════════════
 function fmtDateLocal(d) {
-  const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,'0'), dd = String(d.getDate()).padStart(2,'0');
-  return `${y}-${m}-${dd}`;
+  return d.toLocaleDateString('en-NZ', {
+    timeZone: 'Pacific/Auckland',
+    year: 'numeric', month: '2-digit', day: '2-digit'
+  }).split('/').reverse().join('-');
 }
 function todayLocal() { return fmtDateLocal(new Date()); }
 
@@ -838,7 +840,11 @@ function calcBlockStock(branchNo, grade) {
     if (dow > 4) continue;
     const dateStr = fmtDateLocal(d);
     const actual = getActualProduction(bn, grade, dateStr);
-    produced += actual !== null ? actual.qty : getTemplateQty(bn, grade, dateStr);
+    if (actual !== null) {
+      produced += actual.qty;
+    } else if (dateStr !== todayStr) {
+      produced += getTemplateQty(bn, grade, dateStr);
+    }
   }
 
   const adjustments = blockAdjustments
@@ -856,7 +862,7 @@ function calcBlockStock(branchNo, grade) {
     if (j.completime) {
       return baseTimestamp
         ? j.completime > baseTimestamp
-        : j.completime.slice(0, 10) >= baseDate;
+        : fmtDateLocal(new Date(j.completime)) >= baseDate;
     }
     return (j.finishdate || '') >= baseDate;
   };
@@ -953,7 +959,11 @@ function calcUnitStock(branchNo, productName) {
     if (dow > 4) continue;
     const dateStr = fmtDateLocal(d);
     const actual = getUnitActualProduction(bn, productName, dateStr);
-    produced += actual !== null ? actual.qty : getUnitTemplateQty(bn, productName, dateStr);
+    if (actual !== null) {
+      produced += actual.qty;
+    } else if (dateStr !== todayStr) {
+      produced += getUnitTemplateQty(bn, productName, dateStr);
+    }
   }
 
   const adjustments = unitAdjustments
@@ -964,7 +974,7 @@ function calcUnitStock(branchNo, productName) {
     if (j.completime) {
       return baseTimestamp
         ? j.completime > baseTimestamp
-        : j.completime.slice(0, 10) >= baseDate;
+        : fmtDateLocal(new Date(j.completime)) >= baseDate;
     }
     return (j.finishdate || '') >= baseDate;
   };
@@ -1454,7 +1464,7 @@ async function saveUnitStocktakeEntry(bn, productName, dt, qty) {
       if (variance !== 0) varianceNote = ` (variance ${variance > 0 ? '+' : ''}${variance} vs system: was ${Math.round(priorStock.current)})`;
     }
   }
-  const ok = await sbInsert('unit_stock_entries', { branch_no: bn, product_name: productName, entry_date: dt, qty, notes: 'Opening count' + varianceNote });
+  const ok = await sbInsert('unit_stock_entries', { branch_no: bn, product_name: productName, entry_date: dt, entry_timestamp: new Date().toISOString(), qty, notes: 'Opening count' + varianceNote });
   if (ok && dt <= todayLocal()) {
     const prodToDelete = unitProduction.filter(p => Number(p.branch_no)===bn && p.product_name===productName && p.production_date<=dt);
     const adjToDelete  = unitAdjustments.filter(a => Number(a.branch_no)===bn && a.product_name===productName && a.adjustment_date<=dt);
