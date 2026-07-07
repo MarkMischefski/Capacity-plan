@@ -595,6 +595,21 @@ let unitProductionTemplate = [];
 let unitStockTrans  = []; // STOCK_TRANS rows: sales (type 0) + transfers (type 2)
 let branchLocations = []; // branch_no → location_no mapping from BRANCHES table
 
+// Pre-built lookup maps — rebuilt once after each data load rather than
+// inside every calcBlockStock/calcUnitStock call. Dramatically reduces
+// lag when switching between grade tabs since each map rebuild was
+// scanning the full arrays (5740 sales lines, 41 machines, 12395 items).
+let _slMap = {};
+let _mMap  = {};
+let _stMap = {};
+let _locMap = {};
+function rebuildLookupMaps() {
+  _slMap  = Object.fromEntries(salesLines.map(l => [Number(l.solineid), l]));
+  _mMap   = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
+  _stMap  = Object.fromEntries(stockItems.map(s => [s.stockcode, s]));
+  _locMap = Object.fromEntries(branchLocations.map(r => [Number(r.branch_no), Number(r.location_no)]));
+}
+
 // ══════════════════════════════════════════════
 // DATE HELPERS (ported from desktop app)
 // ══════════════════════════════════════════════
@@ -700,6 +715,7 @@ async function loadAllData() {
     schedule = sch; salesLines = sl; machines = mc;
     unitStockEntries = use; unitProduction = up; unitAdjustments = ua; unitProductionTemplate = upt;
     unitStockTrans = ust; branchLocations = bl;
+    rebuildLookupMaps(); // rebuild cached lookup maps once after all data is loaded
 
     if (sharedSettings && sharedSettings.length) {
       const shared = sharedSettings[0].settings || {};
@@ -804,8 +820,8 @@ function gradeHasRequirement(bn, grade) {
   const wasteFac = 1 - ((parseFloat(mat.wastePct)||0)/100);
   if (!(blockM3 > 0 && wasteFac > 0)) return false;
   const stMap = Object.fromEntries(stockItems.map(s => [s.stockcode, s]));
-  const slMap = Object.fromEntries(salesLines.map(l => [Number(l.solineid), l]));
-  const mMap  = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
+  const slMap = _slMap;
+  const mMap  = _mMap;
 
   const fourWeekDays = [];
   for (let i = 0; i < 4; i++) {
@@ -861,9 +877,10 @@ function calcBlockStock(branchNo, grade) {
   const mat = (settings.branchMaterial || {})[bn] || {};
   const blockM3 = parseFloat(mat.blockM3) || 0;
   const wasteFac = 1 - ((parseFloat(mat.wastePct) || 0) / 100);
-  const stockMap = Object.fromEntries(stockItems.map(s => [s.stockcode, s]));
-  const slMap = Object.fromEntries(salesLines.map(l => [Number(l.solineid), l]));
-  const machineMap = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
+  // Use pre-built cached maps — rebuilt once after data load, not per call
+  const stockMap = _stMap;
+  const slMap = _slMap;
+  const machineMap = _mMap;
 
   const jobCompletedAfterBase = (j) => {
     if (j.completime) {
@@ -893,30 +910,29 @@ function calcBlockStock(branchNo, grade) {
   // Inter-branch transfers from unit_stock_trans (TRANSTYPE=2 only).
   let transferMovement = 0;
   if (unitStockTrans.length > 0) {
-    const locMap = Object.fromEntries(
-      branchLocations.map(r => [Number(r.branch_no), Number(r.location_no)])
-    );
-    const locNo = locMap[bn];
+    const locNo = _locMap[bn];
     if (locNo != null) {
-      const gradeStockCodes = new Set(
-        stockItems.filter(s => (s.x_grade||'').trim() === grade && s.x_cubic && blockM3 > 0).map(s => s.stockcode)
-      );
-      const transAfterBase = (t) => {
-        if (t.posttime) {
-          return baseTimestamp
-            ? t.posttime > baseTimestamp
-            : fmtDateLocal(new Date(t.posttime)) >= baseDate;
-        }
-        return (t.transdate || '') >= baseDate;
-      };
+      // Pre-build stockcode→cubic map filtered to this grade — avoids
+      // repeated stockItems.find() inside the forEach loop
+      const gradeCubicMap = {};
+      stockItems.forEach(s => {
+        if ((s.x_grade||'').trim() === grade && s.x_cubic && blockM3 > 0)
+          gradeCubicMap[s.stockcode] = parseFloat(s.x_cubic);
+      });
+      const gradeStockCodes = new Set(Object.keys(gradeCubicMap));
+
       unitStockTrans
-        .filter(t => Number(t.transtype) === 2 && gradeStockCodes.has((t.stockcode||'').trim()) && transAfterBase(t))
+        .filter(t => Number(t.transtype) === 2 && gradeStockCodes.has((t.stockcode||'').trim()))
         .forEach(t => {
-          const qty = parseFloat(t.quantity) || 0;
           if (Number(t.location) !== locNo) return;
-          const st = stockItems.find(s => s.stockcode === (t.stockcode||'').trim());
-          if (!st || !parseFloat(st.x_cubic) || wasteFac <= 0) return;
-          const blocks = parseFloat(st.x_cubic) * Math.abs(qty) / (blockM3 * wasteFac);
+          // Date check
+          if (t.posttime) {
+            if (baseTimestamp ? t.posttime <= baseTimestamp : fmtDateLocal(new Date(t.posttime)) < baseDate) return;
+          } else if ((t.transdate||'') < baseDate) return;
+          const qty = parseFloat(t.quantity) || 0;
+          const xCubic = gradeCubicMap[(t.stockcode||'').trim()];
+          if (!xCubic || wasteFac <= 0) return;
+          const blocks = xCubic * Math.abs(qty) / (blockM3 * wasteFac);
           transferMovement += qty > 0 ? blocks : -blocks;
         });
     }
@@ -955,8 +971,8 @@ function getUnitActualProduction(bn, productName, dateStr) {
 function unitProductHasRequirement(bn, productName) {
   const codes = getUnitProductCodes(productName);
   if (!codes.length) return false;
-  const slMap = Object.fromEntries(salesLines.map(l => [Number(l.solineid), l]));
-  const mMap  = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
+  const slMap = _slMap;
+  const mMap  = _mMap;
   const fourWeekDays = [];
   for (let i = 0; i < 4; i++) {
     getWeekDates(i).slice(0, 5).forEach(d => fourWeekDays.push(fmtDateLocal(d)));
@@ -1018,8 +1034,8 @@ function calcUnitStock(branchNo, productName) {
     return (j.finishdate || '') >= baseDate;
   };
 
-  const slMap = Object.fromEntries(salesLines.map(l => [Number(l.solineid), l]));
-  const machineMap = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
+  const slMap = _slMap;
+  const machineMap = _mMap;
   let usedUnits = 0;
   schedule
     .filter(j => (Number(j.iscomplete) === 1 || Number(j.iscomplete) === 2) && jobCompletedAfterBase(j))
@@ -1129,8 +1145,8 @@ async function saveDeviceSettings() {
 
 function selectItem(type, key) {
   activeItem = { type, key };
-  renderGradeTabs();
-  renderContent();
+  renderGradeTabs(); // paint tab highlight immediately
+  requestAnimationFrame(() => renderContent()); // defer heavy calc to next frame
 }
 
 function renderContent() {
@@ -1159,10 +1175,11 @@ function renderContent() {
   const today = todayLocal();
   const currentWeekStart = weeks2[0].days[0];
 
-  const weekBlocks = weeks2.map(wk => {
-    const slMap = Object.fromEntries(salesLines.map(l => [Number(l.solineid), l]));
-    const mMap  = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
+  const slMap = _slMap;
+  const mMap  = _mMap;
+  const stMap = Object.fromEntries(stockItems.map(s => [s.stockcode, s]));
 
+  const weekBlocks = weeks2.map(wk => {
     let required = 0;
     if (isUnit) {
       // Unit products: direct unit count from outstanding sales lines matched
