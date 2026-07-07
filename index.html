@@ -591,6 +591,10 @@ let unitProduction = [];
 let unitAdjustments = [];
 let unitProductionTemplate = [];
 
+// Stock transactions and branch location mapping — shared between block and unit stock calcs
+let unitStockTrans  = []; // STOCK_TRANS rows: sales (type 0) + transfers (type 2)
+let branchLocations = []; // branch_no → location_no mapping from BRANCHES table
+
 // ══════════════════════════════════════════════
 // DATE HELPERS (ported from desktop app)
 // ══════════════════════════════════════════════
@@ -673,7 +677,7 @@ async function sbDelete(table, id) {
 async function loadAllData() {
   setStatus('Loading…');
   try {
-    const [si, bse, bp, ba, bpt, sch, sl, mc, sharedSettings, branchOverrideRows, use, up, ua, upt] = await Promise.all([
+    const [si, bse, bp, ba, bpt, sch, sl, mc, sharedSettings, branchOverrideRows, use, up, ua, upt, ust, bl] = await Promise.all([
       sbFetch('capacity_stock_items'),
       sbFetch('block_stock_entries'),
       sbFetch('block_production'),
@@ -688,11 +692,14 @@ async function loadAllData() {
       sbFetch('unit_production'),
       sbFetch('unit_adjustments'),
       sbFetch('unit_production_template'),
+      sbFetch('unit_stock_trans', '&order=posttime.desc'),
+      sbFetch('capacity_branch_locations', '&order=branch_no.asc'),
     ]);
     stockItems = si; blockStockEntries = bse; blockProduction = bp;
     blockAdjustments = ba; blockProductionTemplate = bpt;
     schedule = sch; salesLines = sl; machines = mc;
     unitStockEntries = use; unitProduction = up; unitAdjustments = ua; unitProductionTemplate = upt;
+    unitStockTrans = ust; branchLocations = bl;
 
     if (sharedSettings && sharedSettings.length) {
       const shared = sharedSettings[0].settings || {};
@@ -883,8 +890,40 @@ function calcBlockStock(branchNo, grade) {
     });
   const usedBlocks = (blockM3 > 0 && wasteFac > 0) ? usedCubic / (blockM3 * wasteFac) : 0;
 
-  const current = baseQty + produced + adjustments - usedBlocks;
-  return { baseQty, baseDate, produced, adjustments, usedBlocks, current };
+  // Inter-branch transfers from unit_stock_trans (TRANSTYPE=2 only).
+  let transferMovement = 0;
+  if (unitStockTrans.length > 0) {
+    const locMap = Object.fromEntries(
+      branchLocations.map(r => [Number(r.branch_no), Number(r.location_no)])
+    );
+    const locNo = locMap[bn];
+    if (locNo != null) {
+      const gradeStockCodes = new Set(
+        stockItems.filter(s => (s.x_grade||'').trim() === grade && s.x_cubic && blockM3 > 0).map(s => s.stockcode)
+      );
+      const transAfterBase = (t) => {
+        if (t.posttime) {
+          return baseTimestamp
+            ? t.posttime > baseTimestamp
+            : fmtDateLocal(new Date(t.posttime)) >= baseDate;
+        }
+        return (t.transdate || '') >= baseDate;
+      };
+      unitStockTrans
+        .filter(t => Number(t.transtype) === 2 && gradeStockCodes.has((t.stockcode||'').trim()) && transAfterBase(t))
+        .forEach(t => {
+          const qty = parseFloat(t.quantity) || 0;
+          if (Number(t.location) !== locNo) return;
+          const st = stockItems.find(s => s.stockcode === (t.stockcode||'').trim());
+          if (!st || !parseFloat(st.x_cubic) || wasteFac <= 0) return;
+          const blocks = parseFloat(st.x_cubic) * Math.abs(qty) / (blockM3 * wasteFac);
+          transferMovement += qty > 0 ? blocks : -blocks;
+        });
+    }
+  }
+
+  const current = baseQty + produced + adjustments - usedBlocks + transferMovement;
+  return { baseQty, baseDate, produced, adjustments, usedBlocks, transferMovement, current };
 }
 
 // ══════════════════════════════════════════════
