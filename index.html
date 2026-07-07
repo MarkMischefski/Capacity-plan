@@ -1496,7 +1496,7 @@ async function saveStocktakeEntry(bn, grade, dt, qty) {
       if (variance !== 0) varianceNote = ` (variance ${variance > 0 ? '+' : ''}${variance} vs system: was ${Math.round(priorStock.current)})`;
     }
   }
-  const ok = await sbInsert('block_stock_entries', { branch_no: bn, grade, entry_date: dt, qty, notes: 'Opening count' + varianceNote });
+  const ok = await sbInsert('block_stock_entries', { branch_no: bn, grade, entry_date: dt, entry_timestamp: new Date().toISOString(), qty, notes: 'Opening count' + varianceNote });
   if (ok && dt <= todayLocal()) {
     const prodToDelete = blockProduction.filter(p => Number(p.branch_no)===bn && p.grade===grade && p.production_date<=dt);
     const adjToDelete  = blockAdjustments.filter(a => Number(a.branch_no)===bn && a.grade===grade && a.adjustment_date<=dt);
