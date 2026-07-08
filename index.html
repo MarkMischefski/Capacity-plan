@@ -1049,19 +1049,47 @@ function calcUnitStock(branchNo, productName) {
     return (j.finishdate || '') >= baseDate;
   };
 
-  const slMap = _slMap;
-  const machineMap = _mMap;
+  const transAfterBase = (t) => {
+    if (t.posttime) {
+      return baseTimestamp
+        ? t.posttime > baseTimestamp
+        : fmtDateLocal(new Date(t.posttime)) >= baseDate;
+    }
+    return (t.transdate || '') >= baseDate;
+  };
+
   let usedUnits = 0;
-  schedule
-    .filter(j => (Number(j.iscomplete) === 1 || Number(j.iscomplete) === 2) && jobCompletedAfterBase(j))
-    .forEach(j => {
-      const m = machineMap[Number(j.machineno)];
-      if (!m || Number(m.branchno) !== bn) return;
-      const sl = slMap[Number(j.line_seqno)];
-      if (!sl || !codes.includes((sl.linked_stockcode||'').trim())) return;
-      const doneQty = Number(j.iscomplete) === 2 && parseFloat(sl.sup_quant) > 0 ? parseFloat(sl.sup_quant) : parseFloat(j.completeqty) || parseFloat(j.qty) || 0;
-      usedUnits += Math.max(0, doneQty);
-    });
+  const locNo = _locMap[bn];
+
+  if (locNo != null && unitStockTrans.length > 0) {
+    // Transaction-based: use STOCK_TRANS for sales, credit returns, and transfers
+    unitStockTrans
+      .filter(t => transAfterBase(t) && codes.includes((t.stockcode||'').trim()))
+      .forEach(t => {
+        const qty = parseFloat(t.quantity) || 0;
+        const tLoc = Number(t.location);
+        if (qty < 0 && tLoc === locNo) {
+          usedUnits += Math.abs(qty); // sale or transfer out
+        } else if (qty > 0 && tLoc === locNo) {
+          usedUnits -= qty; // transfer in OR credit return (TRANSTYPE=0 positive qty)
+        }
+      });
+    usedUnits = Math.max(0, usedUnits);
+  } else {
+    // Fallback: schedule-based while unit_stock_trans is being set up
+    const slMap = _slMap;
+    const machineMap = _mMap;
+    schedule
+      .filter(j => (Number(j.iscomplete) === 1 || Number(j.iscomplete) === 2) && jobCompletedAfterBase(j))
+      .forEach(j => {
+        const m = machineMap[Number(j.machineno)];
+        if (!m || Number(m.branchno) !== bn) return;
+        const sl = slMap[Number(j.line_seqno)];
+        if (!sl || !codes.includes((sl.linked_stockcode||'').trim())) return;
+        const doneQty = Number(j.iscomplete) === 2 && parseFloat(sl.sup_quant) > 0 ? parseFloat(sl.sup_quant) : parseFloat(j.completeqty) || parseFloat(j.qty) || 0;
+        usedUnits += Math.max(0, doneQty);
+      });
+  }
 
   const current = baseQty + produced + adjustments - usedUnits;
   const result = { baseQty, baseDate, produced, adjustments, usedBlocks: usedUnits, current };
