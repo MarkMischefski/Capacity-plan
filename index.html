@@ -608,6 +608,8 @@ function rebuildLookupMaps() {
   _mMap   = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
   _stMap  = Object.fromEntries(stockItems.map(s => [s.stockcode, s]));
   _locMap = Object.fromEntries(branchLocations.map(r => [Number(r.branch_no), Number(r.location_no)]));
+  _blockStockCache = {};
+  _unitStockCache  = {};
 }
 
 // ══════════════════════════════════════════════
@@ -844,8 +846,16 @@ function gradeHasRequirement(bn, grade) {
   return cubic > 0;
 }
 
+// Result cache for calcBlockStock/calcUnitStock — keyed by branch+grade/product.
+// Cleared when data reloads so stale results are never shown.
+let _blockStockCache = {};
+let _unitStockCache  = {};
+
 function calcBlockStock(branchNo, grade) {
   const bn = Number(branchNo);
+  const cacheKey = `${bn}:${grade}`;
+  if (_blockStockCache[cacheKey]) return _blockStockCache[cacheKey];
+
   const entries = blockStockEntries
     .filter(e => Number(e.branch_no) === bn && e.grade === grade)
     .sort((a, b) => b.entry_date.localeCompare(a.entry_date));
@@ -939,7 +949,9 @@ function calcBlockStock(branchNo, grade) {
   }
 
   const current = baseQty + produced + adjustments - usedBlocks + transferMovement;
-  return { baseQty, baseDate, produced, adjustments, usedBlocks, transferMovement, current };
+  const result = { baseQty, baseDate, produced, adjustments, usedBlocks, transferMovement, current };
+  _blockStockCache[cacheKey] = result;
+  return result;
 }
 
 // ══════════════════════════════════════════════
@@ -994,6 +1006,9 @@ function unitProductHasRequirement(bn, productName) {
 
 function calcUnitStock(branchNo, productName) {
   const bn = Number(branchNo);
+  const cacheKey = `${bn}:${productName}`;
+  if (_unitStockCache[cacheKey]) return _unitStockCache[cacheKey];
+
   const codes = getUnitProductCodes(productName);
   if (!codes.length) return null;
 
@@ -1049,7 +1064,9 @@ function calcUnitStock(branchNo, productName) {
     });
 
   const current = baseQty + produced + adjustments - usedUnits;
-  return { baseQty, baseDate, produced, adjustments, usedBlocks: usedUnits, current };
+  const result = { baseQty, baseDate, produced, adjustments, usedBlocks: usedUnits, current };
+  _unitStockCache[cacheKey] = result;
+  return result;
 }
 
 // ══════════════════════════════════════════════
@@ -1145,8 +1162,11 @@ async function saveDeviceSettings() {
 
 function selectItem(type, key) {
   activeItem = { type, key };
-  renderGradeTabs(); // paint tab highlight immediately
-  requestAnimationFrame(() => renderContent()); // defer heavy calc to next frame
+  renderGradeTabs();
+  // Show loading skeleton immediately so tab feels responsive
+  const el = document.getElementById('content');
+  el.innerHTML = `<div class="empty-state" style="color:var(--muted);">Loading...</div>`;
+  requestAnimationFrame(() => renderContent());
 }
 
 function renderContent() {
@@ -1177,7 +1197,7 @@ function renderContent() {
 
   const slMap = _slMap;
   const mMap  = _mMap;
-  const stMap = Object.fromEntries(stockItems.map(s => [s.stockcode, s]));
+  const stMap = _stMap;
 
   const weekBlocks = weeks2.map(wk => {
     let required = 0;
