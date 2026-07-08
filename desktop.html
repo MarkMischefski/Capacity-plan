@@ -3690,11 +3690,14 @@ function calcUnitStock(branchNo, productName, { confirmedOnly = false } = {}) {
       .forEach(t => {
         const qty = parseFloat(t.quantity) || 0;
         const tLoc = Number(t.location);
+        const tt = Number(t.transtype);
         if (qty < 0 && tLoc === locNo) {
-          // Stock leaving this branch (sale or transfer out) — add absolute value
+          // Stock leaving this branch (sale or transfer out)
           usedUnits += Math.abs(qty);
-        } else if (qty > 0 && tLoc === locNo && Number(t.transtype) === 2) {
-          // Transfer IN to this branch — reduces usedUnits (net effect: adds to stock)
+        } else if (qty > 0 && tLoc === locNo) {
+          // Stock returning to this branch:
+          // TRANSTYPE=2 → transfer IN; TRANSTYPE=0 → credit return (goods returned)
+          // Both add back to stock (reduce usedUnits)
           usedUnits -= qty;
         }
       });
@@ -4425,11 +4428,19 @@ async function renderUnitProducts(silent) {
                   }).map(t => {
                     const qty = parseFloat(t.quantity) || 0;
                     const tLoc = Number(t.location);
-                    const isTransferIn = Number(t.transtype)===2 && qty > 0 && tLoc===locNo;
-                    const isTransferOut = Number(t.transtype)===2 && qty < 0 && tLoc===locNo;
-                    const isSale = Number(t.transtype)===0 && qty < 0 && tLoc===locNo;
-                    const displayQty = isTransferIn ? qty : -Math.abs(qty);
-                    const typeLabel = isSale ? 'Sale' : isTransferIn ? 'Transfer in' : 'Transfer out';
+                    const tt = Number(t.transtype);
+                    const isSale       = tt===0 && qty < 0 && tLoc===locNo;
+                    const isCreditReturn = tt===0 && qty > 0 && tLoc===locNo;
+                    const isTransferIn = tt===2 && qty > 0 && tLoc===locNo;
+                    const isTransferOut= tt===2 && qty < 0 && tLoc===locNo;
+                    // displayQty: positive = stock added, negative = stock removed
+                    const displayQty = (isSale||isTransferOut) ? -Math.abs(qty)
+                                     : (isCreditReturn||isTransferIn) ? Math.abs(qty)
+                                     : qty;
+                    const typeLabel = isSale ? 'Sale'
+                                   : isCreditReturn ? 'Credit return'
+                                   : isTransferIn ? 'Transfer in'
+                                   : 'Transfer out';
                     const note = t.from_hdr ? `${typeLabel} — Order #${t.from_hdr}` : typeLabel;
                     const ts = t.posttime || null;
                     const sortDate = ts ? fmtDateLocal(new Date(ts)) : (t.transdate||'');
@@ -4550,17 +4561,31 @@ async function renderAnalytics() {
   // grades for the headline chart (grade breakdown shown separately below)
   const perGrade = allGrades.map(grade => {
     const weekly = weeksBack.map(wk => {
-      // Actual: sum real entries only — past weeks shouldn't fall back to the
-      // weekly template, since that's a forecast tool, not a historical record
+      // Actual: use real entries where they exist, fall back to template for
+      // past days without an entry — same proxy rule used in calcBlockStock.
+      // Template is NOT used for today or future days (those are forecasts,
+      // not historical production).
+      const today = todayLocal();
       const actual = wk.workDays.reduce((s, d) => {
         const a = getActualProduction(bn, grade, d);
-        return s + (a ? a.qty : 0);
+        if (a) return s + a.qty;
+        // Past days only — use template as proxy for production that happened
+        // but wasn't explicitly entered
+        if (d < today) return s + getTemplateQty(bn, grade, d);
+        return s;
       }, 0);
 
-      // Required: same cubic-sum-then-round-once pattern used everywhere else
+      // Required: use ord_quant (original order quantity) for ALL jobs on this
+      // week's schedule, regardless of iscomplete status. This is a historical
+      // "what was needed" figure for comparison against actual production —
+      // NOT an outstanding balance. Using ord_quant - sup_quant caused required
+      // to shrink as orders were supplied, making past weeks look like less was
+      // needed than actually was. Including iscomplete=2 (fully supplied) ensures
+      // completed orders don't drop off the view.
       let cubic = 0;
       schedule.filter(j =>
-        (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 1 || Number(j.iscomplete) === 4) &&
+        (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 1 ||
+         Number(j.iscomplete) === 2 || Number(j.iscomplete) === 4) &&
         wk.workDays.includes(parseDate(j.startdate))
       ).forEach(j => {
         const m = mMap[Number(j.machineno)];
@@ -4568,7 +4593,9 @@ async function renderAnalytics() {
         const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
         const st = stMap[sl.stockcode];
         if (!st || (st.x_grade||'').trim() !== grade || !parseFloat(st.x_cubic)) return;
-        const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
+        // Use ord_quant directly — the full original order quantity —
+        // not ord_quant - sup_quant which shrinks as orders are fulfilled.
+        const lq = parseFloat(sl.ord_quant) || 0;
         cubic += parseFloat(st.x_cubic) * Math.max(0, lq);
       });
       const required = (blockM3>0 && wasteFac>0 && cubic>0) ? Math.ceil(cubic/(blockM3*wasteFac)) : 0;
@@ -4586,19 +4613,24 @@ async function renderAnalytics() {
     const weekly = weeksBack.map(wk => {
       const actual = wk.workDays.reduce((s, d) => {
         const a = getUnitActualProduction(bn, productName, d);
-        return s + (a ? a.qty : 0);
+        if (a) return s + a.qty;
+        const today = todayLocal();
+        if (d < today) return s + getUnitTemplateQty(bn, productName, d);
+        return s;
       }, 0);
 
       let units = 0;
       schedule.filter(j =>
-        (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 1 || Number(j.iscomplete) === 4) &&
+        (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 1 ||
+         Number(j.iscomplete) === 2 || Number(j.iscomplete) === 4) &&
         wk.workDays.includes(parseDate(j.startdate))
       ).forEach(j => {
         const m = mMap[Number(j.machineno)];
         if (!m || Number(m.branchno) !== bn) return;
         const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
         if (!codes.includes((sl.linked_stockcode||'').trim())) return;
-        const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
+        // Use ord_quant directly — historical "what was needed", not current outstanding
+        const lq = parseFloat(sl.ord_quant) || 0;
         units += Math.max(0, lq);
       });
       const required = Math.round(units);
