@@ -2071,11 +2071,6 @@ function renderJobs() {
     const m = machineMap[j.machineno];
     const mName = m ? m.machine_name : `#${j.machineno}`;
     const bName = m ? branchName(m.branchno) : '—';
-    const due = parseDate(j.duedate);
-    const dueDateObj = due ? new Date(due) : null;
-    const isJobActive = Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4;
-    const isOverdue = dueDateObj && dueDateObj < today && isJobActive;
-    const isNear    = dueDateObj && !isOverdue && (dueDateObj - today) < 3*24*60*60*1000 && isJobActive;
 
     // Resolve stockcode and grade via sales line
     const salesLine  = salesLineMap[Number(j.line_seqno)];
@@ -2085,6 +2080,15 @@ function renderJobs() {
     const stockdesc  = salesLine ? (salesLine.description || stock?.description || '') : '—';
     const grade      = stock    ? (stock.x_grade || '—') : '—';
     const hdrSeqno   = salesLine ? (salesLine.hdr_seqno ?? '—') : '—';
+
+    // Use salesLine.duedate as authoritative — it's updated on every sync
+    // via a full upsert of SALESORD_LINES. j.duedate (from X_PRODUCTION_SCHEDULE)
+    // only updates when the schedule row itself changes, so can lag behind.
+    const due = parseDate(salesLine?.duedate) || parseDate(j.duedate);
+    const dueDateObj = due ? new Date(due) : null;
+    const isJobActive = Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4;
+    const isOverdue = dueDateObj && dueDateObj < today && isJobActive;
+    const isNear    = dueDateObj && !isOverdue && (dueDateObj - today) < 3*24*60*60*1000 && isJobActive;
 
     // m³ displayed depends on job state:
     // - Outstanding (iscomplete=0/4): outstanding cubic = x_cubic * (ord_quant - sup_quant)
@@ -2730,17 +2734,20 @@ function renderDashUnitProducts(branches) {
     const unitsByDay = {};
     rollingDays.forEach(d => { unitsByDay[d] = 0; });
     schedule.filter(j =>
-      (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4) &&
-      effectiveJobDate(parseDate(j.startdate), rollingDays) <= rollingDays[rollingDays.length-1]
+      Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4
     ).forEach(j => {
       const m = mMap[Number(j.machineno)];
       if (!m || Number(m.branchno) !== bn) return;
       const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
       if (!codes.includes((sl.linked_stockcode||'').trim())) return;
+      const effectiveDate = parseDate(sl.duedate) || parseDate(j.duedate) || parseDate(j.startdate);
+      if (!effectiveDate) return;
+      // Clip overdue jobs to first rolling day; drop jobs beyond the window
+      const dStr = effectiveJobDate(effectiveDate, rollingDays);
+      if (dStr > rollingDays[rollingDays.length - 1]) return;
       const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
       const units = Math.max(0, lq);
       weekUnits += units;
-      const dStr = effectiveJobDate(parseDate(j.startdate), rollingDays);
       if (unitsByDay[dStr] !== undefined) unitsByDay[dStr] += units;
     });
     const totalRequired = Math.round(weekUnits);
@@ -4257,21 +4264,39 @@ async function renderUnitProducts(silent) {
         const unitsByDay = {};
         wk.workDays.forEach(d => { unitsByDay[d] = 0; });
         const windowForOverdueCheck = wk.offset === 0 ? wk.workDays : null;
-        schedule.filter(j => {
-          if (Number(j.iscomplete) !== 0 && Number(j.iscomplete) !== 4) return false;
-          const jDate = parseDate(j.startdate);
-          if (windowForOverdueCheck) return effectiveJobDate(jDate, windowForOverdueCheck) <= wk.workDays[wk.workDays.length-1];
-          return wk.workDays.includes(jDate);
-        }).forEach(j => {
+        // Filter broadly (just iscomplete), then resolve sl and check the
+        // effective due date inside forEach — ensures filter and bucketing
+        // use the same date source (sl.duedate) so totals always match.
+        schedule.filter(j =>
+          Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4
+        ).forEach(j => {
           const m = mMap[Number(j.machineno)];
           if (!m || Number(m.branchno) !== bn) return;
           const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
           if (!codes.includes((sl.linked_stockcode||'').trim())) return;
+          // Use sl.duedate as authoritative — more reliably updated than j.duedate
+          const effectiveDate = parseDate(sl.duedate) || parseDate(j.duedate) || parseDate(j.startdate);
+          if (!effectiveDate) return;
+          // For current week, clip overdue jobs to first working day.
+          // For future weeks, check if the due date falls within this week's range.
+          let dStr;
+          if (windowForOverdueCheck) {
+            dStr = effectiveJobDate(effectiveDate, windowForOverdueCheck);
+            if (!wk.workDays.includes(dStr)) return;
+          } else {
+            // Job's due date must fall within this week (Mon-Fri range)
+            const wkStart = wk.workDays[0];
+            const wkEnd   = wk.workDays[wk.workDays.length - 1];
+            if (effectiveDate < wkStart || effectiveDate > wkEnd) return;
+            // Snap to a working day if due date falls on a weekend
+            dStr = wk.workDays.includes(effectiveDate)
+              ? effectiveDate
+              : wk.workDays[0]; // snap to Monday as fallback
+          }
           const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
           const units = Math.max(0, lq);
           totalUnits += units;
-          const dStr = windowForOverdueCheck ? effectiveJobDate(parseDate(j.startdate), windowForOverdueCheck) : parseDate(j.startdate);
-          if (unitsByDay[dStr] !== undefined) unitsByDay[dStr] += units;
+          unitsByDay[dStr] += units;
         });
         const required = Math.round(totalUnits); // units are already whole, no ceil-conversion needed
         const forecast = getUnitForecastForWeek(bn, productName, wk.workDays);
@@ -4622,13 +4647,15 @@ async function renderAnalytics() {
       let units = 0;
       schedule.filter(j =>
         (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 1 ||
-         Number(j.iscomplete) === 2 || Number(j.iscomplete) === 4) &&
-        wk.workDays.includes(parseDate(j.startdate))
+         Number(j.iscomplete) === 2 || Number(j.iscomplete) === 4)
       ).forEach(j => {
         const m = mMap[Number(j.machineno)];
         if (!m || Number(m.branchno) !== bn) return;
         const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
         if (!codes.includes((sl.linked_stockcode||'').trim())) return;
+        // Use sl.duedate for week bucketing — more reliably updated than j.duedate
+        const effectiveDate = parseDate(sl.duedate) || parseDate(j.duedate) || parseDate(j.startdate);
+        if (!wk.workDays.includes(effectiveDate)) return;
         // Use ord_quant directly — historical "what was needed", not current outstanding
         const lq = parseFloat(sl.ord_quant) || 0;
         units += Math.max(0, lq);
