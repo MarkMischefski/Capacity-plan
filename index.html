@@ -1235,17 +1235,21 @@ function renderContent() {
       const codes = getUnitProductCodes(key);
       let units = 0;
       const overdueWindow = wk.offset === 0 ? wk.days : null;
-      schedule.filter(j => {
-        if (Number(j.iscomplete) !== 0 && Number(j.iscomplete) !== 4) return false;
-        if (overdueWindow) return effectiveJobDate(j.startdate, overdueWindow) <= wk.days[wk.days.length-1];
-        return wk.days.includes(j.startdate);
-      }).forEach(j => {
-        const m = mMap[Number(j.machineno)];
-        if (!m || Number(m.branchno) !== bn) return;
-        const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
-        if (!codes.includes((sl.linked_stockcode||'').trim())) return;
+      // Query sales lines directly — bypasses schedule jobs so requirements
+      // show even when no job exists or job is already complete.
+      salesLines.filter(sl => {
+        if (Number(sl.branchno) !== bn) return false;
+        if (!codes.includes((sl.linked_stockcode||'').trim())) return false;
         const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
-        units += Math.max(0, lq);
+        return lq > 0;
+      }).forEach(sl => {
+        const effectiveDate = sl.duedate;
+        if (!effectiveDate) return;
+        const dStr = overdueWindow ? effectiveJobDate(effectiveDate, overdueWindow) : effectiveDate;
+        if (wk.days.includes(dStr)) {
+          const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
+          units += Math.max(0, lq);
+        }
       });
       required = Math.round(units);
     } else {
