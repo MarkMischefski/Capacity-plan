@@ -3258,9 +3258,10 @@ function calcBlockStock(branchNo, grade, { confirmedOnly = false } = {}) {
       );
       const transAfterBase = (t) => {
         if (t.posttime) {
+          const ts = t.posttime.replace(' ', 'T');
           return baseTimestamp
-            ? t.posttime > baseTimestamp
-            : fmtDateLocal(new Date(t.posttime)) >= baseDate;
+            ? ts > baseTimestamp
+            : fmtDateLocal(new Date(ts)) >= baseDate;
         }
         return (t.transdate || '') >= baseDate;
       };
@@ -3679,17 +3680,23 @@ function calcUnitStock(branchNo, productName, { confirmedOnly = false } = {}) {
   const locNo = locMap[bn];
 
   const transAfterBase = (t) => {
-    // posttime is a full UTC ISO timestamp — compare directly with baseTimestamp
-    // if available, otherwise fall back to date prefix comparison.
     if (t.posttime) {
+      // Normalise: Supabase sometimes returns '2026-07-22 20:21:04+00' (space
+      // separator) instead of '2026-07-22T20:21:04+00' — new Date() handles
+      // the ISO 'T' form reliably across all browsers; space form may return
+      // Invalid Date on some environments.
+      const ts = t.posttime.replace(' ', 'T');
       return baseTimestamp
-        ? t.posttime > baseTimestamp
-        : fmtDateLocal(new Date(t.posttime)) >= baseDate;
+        ? ts > baseTimestamp
+        : fmtDateLocal(new Date(ts)) >= baseDate;
     }
     return (t.transdate || '') >= baseDate;
   };
 
   let usedUnits = 0;
+  let salesUnits = 0;      // TRANSTYPE=0 negative (sales out)
+  let creditUnits = 0;     // TRANSTYPE=0 positive (credit returns in)
+  let transferNet = 0;     // TRANSTYPE=2 net (positive=in, negative=out)
   if (locNo != null && unitStockTrans.length > 0) {
     unitStockTrans
       .filter(t => transAfterBase(t) && codes.includes((t.stockcode||'').trim()))
@@ -3698,12 +3705,12 @@ function calcUnitStock(branchNo, productName, { confirmedOnly = false } = {}) {
         const tLoc = Number(t.location);
         const tt = Number(t.transtype);
         if (qty < 0 && tLoc === locNo) {
-          // Stock leaving this branch (sale or transfer out)
+          if (tt === 0) salesUnits += Math.abs(qty);    // sale out
+          else transferNet -= Math.abs(qty);             // transfer out
           usedUnits += Math.abs(qty);
         } else if (qty > 0 && tLoc === locNo) {
-          // Stock returning to this branch:
-          // TRANSTYPE=2 → transfer IN; TRANSTYPE=0 → credit return (goods returned)
-          // Both add back to stock (reduce usedUnits)
+          if (tt === 0) creditUnits += qty;             // credit return in
+          else transferNet += qty;                       // transfer in
           usedUnits -= qty;
         }
       });
@@ -3736,7 +3743,8 @@ function calcUnitStock(branchNo, productName, { confirmedOnly = false } = {}) {
   }
 
   const current = baseQty + produced + adjustments - usedUnits;
-  return { baseQty, baseDate, baseTimestamp, produced, adjustments, usedBlocks: usedUnits, current };
+  return { baseQty, baseDate, baseTimestamp, produced, adjustments, usedBlocks: usedUnits,
+           salesUnits, creditUnits, transferNet, current };
 }
 
 // ── Grade multiselect dropdown ────────────────
@@ -4111,7 +4119,7 @@ async function renderBlockStock(silent) {
                     return unitStockTrans.filter(t=>{
                       if(Number(t.transtype)!==2||!gradeStockCodes.has((t.stockcode||'').trim())) return false;
                       if(Number(t.location)!==locNo) return false;
-                      if(t.posttime) return stock.baseTimestamp?t.posttime>stock.baseTimestamp:fmtDateLocal(new Date(t.posttime))>=stock.baseDate;
+                      if(t.posttime){const ts=t.posttime.replace(' ','T');return stock.baseTimestamp?ts>stock.baseTimestamp:fmtDateLocal(new Date(ts))>=stock.baseDate;}
                       return (t.transdate||'')>=stock.baseDate;
                     }).map(t=>{
                       const qty=parseFloat(t.quantity)||0;
@@ -4406,7 +4414,9 @@ async function renderUnitProducts(silent) {
             <div style="padding:7px 14px;font-size:11px;color:var(--muted);">
               ${stock ? `Base ${fmtShort(stock.baseDate)}: <span style="font-family:var(--mono);color:var(--text);">${stock.baseQty}</span>
                 &nbsp;+&nbsp;<span style="color:var(--green);">+${stock.produced}</span>
-                &nbsp;-&nbsp;<span style="color:var(--red);">${stock.usedBlocks}</span>
+                &nbsp;-&nbsp;<span style="color:var(--red);">${Math.round(stock.salesUnits ?? stock.usedBlocks)}</span>
+                ${stock.creditUnits ? `&nbsp;ret&nbsp;<span style="color:var(--green);">+${Math.round(stock.creditUnits)}</span>` : ''}
+                ${stock.transferNet ? `&nbsp;xfr&nbsp;<span style="color:var(--accent);">${stock.transferNet>=0?'+':''}${Math.round(stock.transferNet)}</span>` : ''}
                 &nbsp;adj&nbsp;<span style="color:var(--amber);">${stock.adjustments>=0?'+':''}${stock.adjustments}</span>
                 &nbsp;=&nbsp;<span style="font-family:var(--mono);color:${stockCol};font-weight:700;">${Math.round(currentStock)}</span>`
               : 'No opening stock entry yet — click + Stock to add one.'}
@@ -4438,16 +4448,17 @@ async function renderUnitProducts(silent) {
                     // Include rows where this branch is either the source (negative qty)
                     // or the destination of a transfer (positive qty, transtype=2)
                     if (tLoc !== locNo && !(Number(t.transtype)===2 && Number(t.tolocation)===locNo)) return false;
-                    if (t.posttime) return stock.baseTimestamp ? t.posttime > stock.baseTimestamp : fmtDateLocal(new Date(t.posttime)) >= stock.baseDate;
+                    if (t.posttime) { const ts=t.posttime.replace(' ','T'); return stock.baseTimestamp ? ts > stock.baseTimestamp : fmtDateLocal(new Date(ts)) >= stock.baseDate; }
                     return (t.transdate||'') >= stock.baseDate;
                   }).map(t => {
                     const qty = parseFloat(t.quantity) || 0;
                     const tLoc = Number(t.location);
                     const tt = Number(t.transtype);
-                    const isSale       = tt===0 && qty < 0 && tLoc===locNo;
+                    const isToThisBranch = tt===2 && Number(t.tolocation)===locNo && tLoc!==locNo;
+                    const isSale         = tt===0 && qty < 0 && tLoc===locNo;
                     const isCreditReturn = tt===0 && qty > 0 && tLoc===locNo;
-                    const isTransferIn = tt===2 && qty > 0 && tLoc===locNo;
-                    const isTransferOut= tt===2 && qty < 0 && tLoc===locNo;
+                    const isTransferIn   = (tt===2 && qty > 0 && tLoc===locNo) || isToThisBranch;
+                    const isTransferOut  = tt===2 && qty < 0 && tLoc===locNo;
                     // displayQty: positive = stock added, negative = stock removed
                     const displayQty = (isSale||isTransferOut) ? -Math.abs(qty)
                                      : (isCreditReturn||isTransferIn) ? Math.abs(qty)
