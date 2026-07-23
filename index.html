@@ -937,7 +937,7 @@ function calcBlockStock(branchNo, grade) {
           if (Number(t.location) !== locNo) return;
           // Date check
           if (t.posttime) {
-            if (baseTimestamp ? t.posttime <= baseTimestamp : fmtDateLocal(new Date(t.posttime)) < baseDate) return;
+            const _ts=t.posttime.replace(' ','T'); if (baseTimestamp ? _ts <= baseTimestamp : fmtDateLocal(new Date(_ts)) < baseDate) return;
           } else if ((t.transdate||'') < baseDate) return;
           const qty = parseFloat(t.quantity) || 0;
           const xCubic = gradeCubicMap[(t.stockcode||'').trim()];
@@ -1052,8 +1052,8 @@ function calcUnitStock(branchNo, productName) {
   const transAfterBase = (t) => {
     if (t.posttime) {
       return baseTimestamp
-        ? t.posttime > baseTimestamp
-        : fmtDateLocal(new Date(t.posttime)) >= baseDate;
+        ? t.posttime.replace(' ','T') > baseTimestamp
+        : fmtDateLocal(new Date(t.posttime.replace(' ','T'))) >= baseDate;
     }
     return (t.transdate || '') >= baseDate;
   };
