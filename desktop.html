@@ -1681,6 +1681,23 @@ function getBadgeLabel(pct, active) {
 // Returns YYYY-MM-DD of today in local time
 function todayLocal() { return fmtDateLocal(new Date()); }
 
+// Build a UTC ISO timestamp from a NZ-local date + time string.
+// Used for stocktake entry_timestamp so backdated counts use the
+// chosen time rather than the current moment.
+function buildNZTimestamp(dateStr, timeStr) {
+  const t = timeStr || new Date().toLocaleTimeString('en-NZ', {
+    hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Pacific/Auckland'
+  });
+  // Get NZ UTC offset by formatting a known UTC time in NZ timezone
+  // and comparing to see how far ahead NZ is (+12 NZST, +13 NZDT)
+  const probe = new Date('2000-01-01T00:00:00Z');
+  const nzHour = parseInt(new Date(probe.toLocaleString('en-US', { timeZone: 'Pacific/Auckland' })).getHours());
+  const offset = nzHour; // NZ is UTC+12 or UTC+13
+  const offsetStr = `+${String(offset).padStart(2,'0')}:00`;
+  const iso = new Date(`${dateStr}T${t}:00${offsetStr}`).toISOString();
+  return iso;
+}
+
 // For the current week, capacity = remaining working days (today onwards) x daily_hours.
 // For past/future weeks, capacity = full workDays x daily_hours.
 function getCapacity(machine, workDayDates, offsetWeeks) {
@@ -2996,6 +3013,20 @@ async function bsInsert(table, row) {
   return res.ok;
 }
 
+async function bsUpsert(table, row, onConflict) {
+  // Upsert — inserts or updates on conflict. onConflict is the comma-separated
+  // list of columns that form the unique constraint (e.g. 'branch_no,grade,production_date').
+  const url = `${settings.supaUrl}/rest/v1/${table}?on_conflict=${onConflict}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { ...supaHeaders(), 'Content-Type': 'application/json',
+               'Prefer': 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify(row),
+  });
+  if (!res.ok) console.error(`bsUpsert ${table} failed:`, res.status, await res.text());
+  return res.ok;
+}
+
 async function bsDelete(table, id) {
   const res = await fetch(`${settings.supaUrl}/rest/v1/${table}?id=eq.${id}`, {
     method: 'DELETE',
@@ -3152,7 +3183,7 @@ function calcBlockStock(branchNo, grade, { confirmedOnly = false } = {}) {
 
   const base           = entries[0];
   const baseDate       = base.entry_date;
-  const baseTimestamp  = base.entry_timestamp || null; // precise stocktake moment; null for legacy entries
+  const baseTimestamp  = base.entry_timestamp ? base.entry_timestamp.replace(' ','T').replace(/\+00$/, '+00:00') : null; // normalised UTC ISO
   const baseQty        = base.qty;
 
   // Production since base date.
@@ -3258,7 +3289,7 @@ function calcBlockStock(branchNo, grade, { confirmedOnly = false } = {}) {
       );
       const transAfterBase = (t) => {
         if (t.posttime) {
-          const ts = t.posttime.replace(' ', 'T');
+          const ts = t.posttime.replace(' ', 'T').replace(/\+00$/, '+00:00');
           return baseTimestamp
             ? ts > baseTimestamp
             : fmtDateLocal(new Date(ts)) >= baseDate;
@@ -3640,7 +3671,7 @@ function calcUnitStock(branchNo, productName, { confirmedOnly = false } = {}) {
 
   const base          = entries[0];
   const baseDate      = base.entry_date;
-  const baseTimestamp = base.entry_timestamp || null;
+  const baseTimestamp = base.entry_timestamp ? base.entry_timestamp.replace(' ','T').replace(/\+00$/, '+00:00') : null;
   const baseQty       = base.qty;
 
   // Production since base date — same day-by-day walk as calcBlockStock,
@@ -3685,7 +3716,7 @@ function calcUnitStock(branchNo, productName, { confirmedOnly = false } = {}) {
       // separator) instead of '2026-07-22T20:21:04+00' — new Date() handles
       // the ISO 'T' form reliably across all browsers; space form may return
       // Invalid Date on some environments.
-      const ts = t.posttime.replace(' ', 'T');
+      const ts = t.posttime.replace(' ', 'T').replace(/\+00$/, '+00:00');
       return baseTimestamp
         ? ts > baseTimestamp
         : fmtDateLocal(new Date(ts)) >= baseDate;
@@ -4119,7 +4150,7 @@ async function renderBlockStock(silent) {
                     return unitStockTrans.filter(t=>{
                       if(Number(t.transtype)!==2||!gradeStockCodes.has((t.stockcode||'').trim())) return false;
                       if(Number(t.location)!==locNo) return false;
-                      if(t.posttime){const ts=t.posttime.replace(' ','T');return stock.baseTimestamp?ts>stock.baseTimestamp:fmtDateLocal(new Date(ts))>=stock.baseDate;}
+                      if(t.posttime){const ts=t.posttime.replace(' ','T').replace(/\+00$/,'+00:00');return stock.baseTimestamp?ts>stock.baseTimestamp:fmtDateLocal(new Date(ts))>=stock.baseDate;}
                       return (t.transdate||'')>=stock.baseDate;
                     }).map(t=>{
                       const qty=parseFloat(t.quantity)||0;
@@ -4445,21 +4476,21 @@ async function renderUnitProducts(silent) {
                     if (!codes.includes((t.stockcode||'').trim())) return false;
                     if (!stock) return false;
                     const tLoc = Number(t.location);
-                    // Include rows where this branch is either the source (negative qty)
-                    // or the destination of a transfer (positive qty, transtype=2)
-                    if (tLoc !== locNo && !(Number(t.transtype)===2 && Number(t.tolocation)===locNo)) return false;
-                    if (t.posttime) { const ts=t.posttime.replace(' ','T'); return stock.baseTimestamp ? ts > stock.baseTimestamp : fmtDateLocal(new Date(ts)) >= stock.baseDate; }
+                    // Only include rows where THIS branch is the location —
+                    // transfers have two rows (source and destination); we only
+                    // want the row where location=locNo to avoid double-counting.
+                    // Positive qty at locNo = transfer IN, negative = transfer OUT or sale.
+                    if (tLoc !== locNo) return false;
+                    if (t.posttime) { const ts=t.posttime.replace(' ','T').replace(/\+00$/,'+00:00'); return stock.baseTimestamp ? ts > stock.baseTimestamp : fmtDateLocal(new Date(ts)) >= stock.baseDate; }
                     return (t.transdate||'') >= stock.baseDate;
                   }).map(t => {
                     const qty = parseFloat(t.quantity) || 0;
                     const tLoc = Number(t.location);
                     const tt = Number(t.transtype);
-                    const isToThisBranch = tt===2 && Number(t.tolocation)===locNo && tLoc!==locNo;
                     const isSale         = tt===0 && qty < 0 && tLoc===locNo;
                     const isCreditReturn = tt===0 && qty > 0 && tLoc===locNo;
-                    const isTransferIn   = (tt===2 && qty > 0 && tLoc===locNo) || isToThisBranch;
+                    const isTransferIn   = tt===2 && qty > 0 && tLoc===locNo;
                     const isTransferOut  = tt===2 && qty < 0 && tLoc===locNo;
-                    // displayQty: positive = stock added, negative = stock removed
                     const displayQty = (isSale||isTransferOut) ? -Math.abs(qty)
                                      : (isCreditReturn||isTransferIn) ? Math.abs(qty)
                                      : qty;
@@ -4821,7 +4852,10 @@ function showStockEntryModal(bn, grade) {
     <div class="form-row"><div class="form-label">Grade</div>
       <select class="form-input" id="mf-grade">${_gradeOptions(grade)}</select></div>
     <div class="form-row"><div class="form-label">Date</div>
-      <input class="form-input" id="mf-date" type="date" value="${todayLocal()}"></div>
+      <input class="form-input" id="mf-date" type="date" value="${todayLocal()}" oninput="bsStocktakeDateChanged()"></div>
+    <div class="form-row" id="mf-time-row"><div class="form-label">Time of count</div>
+      <input class="form-input" id="mf-time" type="time" value="${new Date().toLocaleTimeString('en-NZ',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'Pacific/Auckland'})}">
+      <span style="font-size:11px;color:var(--muted);margin-left:8px;">Set to end of day for backdated counts</span></div>
     <div class="form-row"><div class="form-label">Blocks on Hand</div>
       <input class="form-input" id="mf-qty" type="number" min="0" placeholder="0"></div>
     <div class="form-row"><div class="form-label">Notes (optional)</div>
@@ -4830,6 +4864,21 @@ function showStockEntryModal(bn, grade) {
       If date is today or earlier, this acts as a <strong>stocktake reset</strong> — all production and adjustment entries from that date onwards will be cleared, and this count becomes the new base.
     </div>`;
   document.getElementById('modal-overlay').classList.add('open');
+}
+
+function bsStocktakeDateChanged() {
+  const dateEl = document.getElementById('mf-date');
+  const timeEl = document.getElementById('mf-time');
+  if (!dateEl || !timeEl) return;
+  const chosen = dateEl.value;
+  const today  = todayLocal();
+  if (chosen < today) {
+    timeEl.value = '23:59';
+  } else {
+    timeEl.value = new Date().toLocaleTimeString('en-NZ', {
+      hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Pacific/Auckland'
+    });
+  }
 }
 
 function showProductionModal(bn, grade) {
@@ -4939,7 +4988,7 @@ async function saveModal() {
           if (variance !== 0) varianceNote = ` (variance ${variance > 0 ? '+' : ''}${variance} vs system: was ${Math.round(priorStock.current)})`;
         }
       }
-      ok = await bsInsert('unit_stock_entries', { branch_no:bn, product_name:productName, entry_date:dt, entry_timestamp: new Date().toISOString(), qty, notes: (notes || 'Opening count') + varianceNote });
+      ok = await bsInsert('unit_stock_entries', { branch_no:bn, product_name:productName, entry_date:dt, entry_timestamp: buildNZTimestamp(dt, document.getElementById('mf-time')?.value), qty, notes: (notes || 'Opening count') + varianceNote });
       if (ok && dt <= todayLocal()) {
         const prodToDelete = unitProduction.filter(p => Number(p.branch_no)===bn && p.product_name===productName && p.production_date<=dt);
         const adjToDelete  = unitAdjustments.filter(a => Number(a.branch_no)===bn && a.product_name===productName && a.adjustment_date<=dt);
@@ -4951,9 +5000,9 @@ async function saveModal() {
         await Promise.all(oldEntries.map(e => bsDelete('unit_stock_entries', e.id)));
       }
     } else if (_modalData.mode === 'unit_production') {
-      ok = await bsInsert('unit_production', { branch_no:bn, product_name:productName, production_date:dt, qty, notes });
+      ok = await bsUpsert('unit_production', { branch_no:bn, product_name:productName, production_date:dt, qty, notes }, 'branch_no,product_name,production_date');
     } else if (_modalData.mode === 'unit_adjustment') {
-      ok = await bsInsert('unit_adjustments', { branch_no:bn, product_name:productName, adjustment_date:dt, qty, reason:notes });
+      ok = await bsUpsert('unit_adjustments', { branch_no:bn, product_name:productName, adjustment_date:dt, qty, reason:notes }, 'branch_no,product_name,adjustment_date');
     }
 
     btn.textContent = 'Save'; btn.disabled = false;
@@ -4996,7 +5045,7 @@ async function saveModal() {
 
     ok = await bsInsert('block_stock_entries', {
       branch_no: bn, grade, entry_date: dt,
-      entry_timestamp: new Date().toISOString(), // precise NZ moment → UTC for comparison with completime
+      entry_timestamp: buildNZTimestamp(dt, document.getElementById('mf-time')?.value),
       qty, notes: fullNotes
     });
     // Stocktake reset: the new count becomes the base AS OF the stocktake date.
@@ -5018,9 +5067,11 @@ async function saveModal() {
       await Promise.all(oldEntries.map(e => bsDelete('block_stock_entries', e.id)));
     }
   } else if (_modalData.mode === 'production') {
-    ok = await bsInsert('block_production', { branch_no:bn, grade, production_date:dt, qty, notes });
+    ok = await bsUpsert('block_production',
+      { branch_no:bn, grade, production_date:dt, qty, notes },
+      'branch_no,grade,production_date');
   } else if (_modalData.mode === 'adjustment') {
-    ok = await bsInsert('block_adjustments', { branch_no:bn, grade, adjustment_date:dt, qty, reason:notes });
+    ok = await bsUpsert('block_adjustments', { branch_no:bn, grade, adjustment_date:dt, qty, reason:notes }, 'branch_no,grade,adjustment_date');
   }
 
   btn.textContent = 'Save'; btn.disabled = false;
@@ -5062,7 +5113,10 @@ function showUnitStockEntryModal(bn, productName) {
     <div class="form-row"><div class="form-label">Units on Hand</div>
       <input class="form-input" id="mf-qty" type="number" min="0" placeholder="0"></div>
     <div class="form-row"><div class="form-label">Date</div>
-      <input class="form-input" id="mf-date" type="date" value="${todayLocal()}"></div>
+      <input class="form-input" id="mf-date" type="date" value="${todayLocal()}" oninput="bsStocktakeDateChanged()"></div>
+    <div class="form-row"><div class="form-label">Time of count</div>
+      <input class="form-input" id="mf-time" type="time" value="${new Date().toLocaleTimeString('en-NZ',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'Pacific/Auckland'})}">
+      <span style="font-size:11px;color:var(--muted);margin-left:8px;">Set to end of day for backdated counts</span></div>
     <div class="form-row"><div class="form-label">Notes (optional)</div>
       <input class="form-input" id="mf-notes" type="text" placeholder="e.g. Weekly stocktake"></div>
     <div style="font-size:11px;color:var(--amber);background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:5px;padding:8px 10px;">
