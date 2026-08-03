@@ -680,6 +680,17 @@ async function sbInsert(table, row) {
   return res.ok;
 }
 
+async function sbUpsert(table, row, onConflict) {
+  const res = await fetch(`${settings.supaUrl}/rest/v1/${table}?on_conflict=${onConflict}`, {
+    method: 'POST',
+    headers: { ...supaHeaders(), 'Content-Type': 'application/json',
+               'Prefer': 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify(row),
+  });
+  if (!res.ok) console.error(`upsert ${table} failed:`, res.status, await res.text());
+  return res.ok;
+}
+
 async function sbDelete(table, id) {
   const res = await fetch(`${settings.supaUrl}/rest/v1/${table}?id=eq.${id}`, {
     method: 'DELETE',
@@ -691,11 +702,31 @@ async function sbDelete(table, id) {
 // ══════════════════════════════════════════════
 // LOAD ALL DATA
 // ══════════════════════════════════════════════
-async function loadAllData() {
+const STOCK_CACHE_KEY = 'expol_stock_items_cache';
+const STOCK_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+const MIN_RELOAD_MS   = 10 * 60 * 1000;        // don't reload if data < 10 min old
+let lastLoadTime = 0;
+
+async function loadAllData(force = false) {
+  // Skip reload if data was fetched recently (e.g. user briefly switches apps)
+  if (!force && Date.now() - lastLoadTime < MIN_RELOAD_MS && stockItems.length > 0) {
+    setStatus('Up to date');
+    return;
+  }
   setStatus('Loading…');
   try {
-    const [si, bse, bp, ba, bpt, sch, sl, mc, sharedSettings, branchOverrideRows, use, up, ua, upt, ust, bl] = await Promise.all([
-      sbFetch('capacity_stock_items'),
+    // Stock items: use localStorage cache (24h TTL) to avoid re-fetching 12k rows every load
+    let si = [];
+    let stockCacheValid = false;
+    try {
+      const cached = localStorage.getItem(STOCK_CACHE_KEY);
+      if (cached) {
+        const { ts, data } = JSON.parse(cached);
+        if (Date.now() - ts < STOCK_CACHE_TTL) { si = data; stockCacheValid = true; }
+      }
+    } catch(e) {}
+
+    const [bse, bp, ba, bpt, sch, sl, mc, sharedSettings, branchOverrideRows, use, up, ua, upt, ust, bl] = await Promise.all([
       sbFetch('block_stock_entries'),
       sbFetch('block_production'),
       sbFetch('block_adjustments'),
@@ -712,6 +743,12 @@ async function loadAllData() {
       sbFetch('unit_stock_trans', '&order=posttime.desc'),
       sbFetch('capacity_branch_locations', '&order=branch_no.asc'),
     ]);
+
+    if (!stockCacheValid) {
+      si = await sbFetch('capacity_stock_items');
+      try { localStorage.setItem(STOCK_CACHE_KEY, JSON.stringify({ ts: Date.now(), data: si })); } catch(e) {}
+    }
+
     stockItems = si; blockStockEntries = bse; blockProduction = bp;
     blockAdjustments = ba; blockProductionTemplate = bpt;
     schedule = sch; salesLines = sl; machines = mc;
@@ -740,6 +777,7 @@ async function loadAllData() {
     }
 
     setStatus(`Connected — updated ${new Date().toLocaleTimeString('en-NZ', {hour:'2-digit', minute:'2-digit'})}`, 'connected');
+    lastLoadTime = Date.now();
     return true;
   } catch (e) {
     console.error('loadAllData failed:', e);
@@ -1489,7 +1527,7 @@ async function saveDayForecast(grade, dateStr, qty, isFuture) {
   // A future override of 0 is deliberate ("definitely zero") and must still
   // be saved as a real row, otherwise it falls back to the template on reload.
   if (qtyInt >= 0) {
-    await sbInsert('block_production', { branch_no: Number(bn), grade, production_date: dateStr, qty: qtyInt, notes: noteStr });
+    await sbUpsert('block_production', { branch_no: Number(bn), grade, production_date: dateStr, qty: qtyInt, notes: noteStr }, 'branch_no,grade,production_date');
   }
   showToast('Saved');
   await loadAllData();
@@ -1509,7 +1547,7 @@ async function saveUnitDayForecast(productName, dateStr, qty, isFuture) {
   // A future override of 0 is deliberate ("definitely zero") and must still
   // be saved as a real row, otherwise it falls back to the template on reload.
   if (qtyInt >= 0) {
-    await sbInsert('unit_production', { branch_no: Number(bn), product_name: productName, production_date: dateStr, qty: qtyInt, notes: noteStr });
+    await sbUpsert('unit_production', { branch_no: Number(bn), product_name: productName, production_date: dateStr, qty: qtyInt, notes: noteStr }, 'branch_no,product_name,production_date');
   }
   showToast('Saved');
   await loadAllData();
@@ -1604,8 +1642,8 @@ async function saveModal() {
     const isFuture = dt > todayLocal();
     const notes = isFuture ? 'Forecast override' : 'Actual production';
     ok = isUnit
-      ? await sbInsert('unit_production', { branch_no: bn, product_name: key, production_date: dt, qty, notes })
-      : await sbInsert('block_production', { branch_no: bn, grade: key, production_date: dt, qty, notes });
+      ? await sbUpsert('unit_production', { branch_no: bn, product_name: key, production_date: dt, qty, notes }, 'branch_no,product_name,production_date')
+      : await sbUpsert('block_production', { branch_no: bn, grade: key, production_date: dt, qty, notes }, 'branch_no,grade,production_date');
   }
 
   btn.textContent = 'Save'; btn.disabled = false;
@@ -1679,14 +1717,14 @@ async function ensureConfigured() {
 // ══════════════════════════════════════════════
 // INIT
 // ══════════════════════════════════════════════
-async function init() {
+async function init(force = true) {
   loadLocalSettings();
   setSplashStatus('Connecting to database…');
   const configured = await ensureConfigured();
   if (!configured) { hideSplash(); return; }
 
   setSplashStatus('Loading stock data…');
-  const ok = await loadAllData();
+  const ok = await loadAllData(force);
   if (ok) {
     renderGradeTabs();
     const onTodayPage     = document.getElementById('page-today').style.display !== 'none';
@@ -1699,10 +1737,11 @@ async function init() {
 }
 
 // Pull-to-refresh feel: simple manual refresh on visibility/online events
+// Pass force=false so switching back to the app within 10 min skips full reload
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') init();
+  if (document.visibilityState === 'visible') init(false);
 });
-window.addEventListener('online', init);
+window.addEventListener('online', () => init(true));
 
 // Register service worker — required by Chrome/Android for full PWA install
 // behaviour (manifest icon, standalone display) instead of a plain bookmark.
