@@ -5373,17 +5373,33 @@ async function fetchFromSupabase() {
 
     // Fetch sales lines — paginated (same pattern as schedule)
     salesLines = await fetchAllPages('capacity_sales_lines', 'solineid.asc');
-    console.log(`Sales lines loaded: ${salesLines.length}, solineid range: ${salesLines[0]?.solineid} - ${salesLines[salesLines.length-1]?.solineid}`);
 
-    // Fetch stock items — paginated
-    stockItems = await fetchAllPages('capacity_stock_items', 'stockcode.asc');
-    console.log(`Stock items loaded: ${stockItems.length}`);
+    // Fetch stock items — cached in localStorage for 24 hours since they rarely change.
+    // This saves ~2.7MB of egress per page load across all branches/users.
+    const STOCK_CACHE_KEY = 'expol_stock_items_cache';
+    const STOCK_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+    let stockCacheValid = false;
+    try {
+      const cached = localStorage.getItem(STOCK_CACHE_KEY);
+      if (cached) {
+        const { ts, data } = JSON.parse(cached);
+        if (Date.now() - ts < STOCK_CACHE_TTL) {
+          stockItems = data;
+          stockCacheValid = true;
+          console.log(`Stock items loaded from cache: ${stockItems.length} items`);
+        }
+      }
+    } catch(e) {}
+    if (!stockCacheValid) {
+      stockItems = await fetchAllPages('capacity_stock_items', 'stockcode.asc');
+      try {
+        localStorage.setItem(STOCK_CACHE_KEY, JSON.stringify({ ts: Date.now(), data: stockItems }));
+      } catch(e) { console.warn('Could not cache stock items:', e); }
+      console.log(`Stock items loaded from Supabase: ${stockItems.length} items`);
+    }
 
-    console.log(`Loaded ${salesLines.length} sales lines, ${stockItems.length} stock items`);
 
     console.log(`Loaded ${machines.length} machines, ${schedule.length} schedule rows`);
-    if (schedule.length > 0) console.log('Sample schedule row:', schedule[0]);
-    if (machines.length > 0) console.log('Sample machine row:', machines[0]);
 
     const now = new Date().toLocaleTimeString('en-NZ', {hour:'2-digit', minute:'2-digit'});
     setStatus(`🟢 Live · ${now}`, 'var(--green)');
