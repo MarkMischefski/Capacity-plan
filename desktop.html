@@ -2630,8 +2630,10 @@ function renderDashBlockProduction(branches) {
       const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
       const st = stMap[sl.stockcode];
       if (!st || (st.x_grade||'').trim() !== grade || !parseFloat(st.x_cubic)) return;
-      const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
-      const jobCubic = parseFloat(st.x_cubic) * Math.max(0, lq);
+      const outstanding = Number(j.iscomplete) === 4
+        ? Math.max(0, (parseFloat(sl.ord_quant)||0) - (parseFloat(j.completeqty)||0))
+        : Math.max(0, (parseFloat(sl.ord_quant)||0) - (parseFloat(sl.sup_quant)||0));
+      const jobCubic = parseFloat(st.x_cubic) * outstanding;
       weekCubic += jobCubic;
       const dStr = effectiveJobDate(parseDate(j.startdate), rollingDays);
       if (cubicByDay[dStr] !== undefined) cubicByDay[dStr] += jobCubic;
@@ -3384,8 +3386,10 @@ function calcRequirementByDay(bn, grade, windowDays) {
     const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
     const st = stMap[sl.stockcode];
     if (!st || (st.x_grade||'').trim() !== grade || !parseFloat(st.x_cubic)) return;
-    const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
-    const jobCubic = parseFloat(st.x_cubic) * Math.max(0, lq);
+    const outstanding = Number(j.iscomplete) === 4
+      ? Math.max(0, (parseFloat(sl.ord_quant)||0) - (parseFloat(j.completeqty)||0))
+      : Math.max(0, (parseFloat(sl.ord_quant)||0) - (parseFloat(sl.sup_quant)||0));
+    const jobCubic = parseFloat(st.x_cubic) * outstanding;
     weekCubic += jobCubic;
     const dStr = effectiveJobDate(parseDate(j.startdate), windowDays);
     if (cubicByDay[dStr] !== undefined) cubicByDay[dStr] += jobCubic;
@@ -3941,8 +3945,13 @@ async function renderBlockStock(silent) {
           const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
           const st = stMap[sl.stockcode];
           if (!st || (st.x_grade||'').trim() !== grade || !parseFloat(st.x_cubic)) return;
-          const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
-          const jobCubic = parseFloat(st.x_cubic) * Math.max(0, lq);
+          // For partial jobs (iscomplete=4), outstanding = ord_quant - completeqty
+          // (blocks already made shouldn't count as required).
+          // For planned jobs (iscomplete=0), outstanding = ord_quant - sup_quant.
+          const outstanding = Number(j.iscomplete) === 4
+            ? Math.max(0, (parseFloat(sl.ord_quant)||0) - (parseFloat(j.completeqty)||0))
+            : Math.max(0, (parseFloat(sl.ord_quant)||0) - (parseFloat(sl.sup_quant)||0));
+          const jobCubic = parseFloat(st.x_cubic) * outstanding;
           cubic += jobCubic;
           const dStr = windowForOverdueCheck ? effectiveJobDate(parseDate(j.startdate), windowForOverdueCheck) : parseDate(j.startdate);
           if (cubicByDay[dStr] !== undefined) cubicByDay[dStr] += jobCubic;
