@@ -878,8 +878,10 @@ function gradeHasRequirement(bn, grade) {
     const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
     const st = stMap[sl.stockcode];
     if (!st || (st.x_grade||'').trim() !== grade || !parseFloat(st.x_cubic)) return;
-    const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
-    cubic += parseFloat(st.x_cubic) * Math.max(0, lq);
+    const outstanding = Number(j.iscomplete) === 4
+      ? Math.max(0, (parseFloat(sl.ord_quant)||0) - (parseFloat(j.completeqty)||0))
+      : Math.max(0, (parseFloat(sl.ord_quant)||0) - (parseFloat(sl.sup_quant)||0));
+    cubic += parseFloat(st.x_cubic) * outstanding;
   });
   return cubic > 0;
 }
@@ -1308,8 +1310,10 @@ function renderContent() {
         const sl = slMap[Number(j.line_seqno)]; if (!sl) return;
         const st = stMap[sl.stockcode];
         if (!st || (st.x_grade||'').trim() !== key || !parseFloat(st.x_cubic)) return;
-        const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
-        cubic += parseFloat(st.x_cubic) * Math.max(0, lq);
+        const outstanding = Number(j.iscomplete) === 4
+          ? Math.max(0, (parseFloat(sl.ord_quant)||0) - (parseFloat(j.completeqty)||0))
+          : Math.max(0, (parseFloat(sl.ord_quant)||0) - (parseFloat(sl.sup_quant)||0));
+        cubic += parseFloat(st.x_cubic) * outstanding;
       });
       required = (blockM3>0 && wasteFac>0 && cubic>0) ? Math.ceil(cubic/(blockM3*wasteFac)) : 0;
     }
