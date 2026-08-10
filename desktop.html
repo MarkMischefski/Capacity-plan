@@ -4585,7 +4585,7 @@ async function saveUnitDayForecast(bn, productName, dateStr, qty, isFuture) {
   // and must still be saved as a real row — otherwise the day silently falls
   // back to the weekly template on reload instead of staying at zero.
   if (qtyInt >= 0) {
-    await bsInsert('unit_production', { branch_no: Number(bn), product_name: productName, production_date: dateStr, qty: qtyInt, notes: noteStr });
+    await bsUpsert('unit_production', { branch_no: Number(bn), product_name: productName, production_date: dateStr, qty: qtyInt, notes: noteStr }, 'branch_no,product_name,production_date');
   }
   await loadUnitProductsData();
   await renderUnitProducts(true);
@@ -4821,9 +4821,9 @@ async function saveDayForecast(bn, grade, dateStr, qty, isFuture) {
   // day") and must still be saved as a real row — otherwise it silently
   // falls back to the weekly template on reload instead of staying at zero.
   if (qtyInt >= 0) {
-    await bsInsert('block_production', {
+    await bsUpsert('block_production', {
       branch_no: Number(bn), grade, production_date: dateStr, qty: qtyInt, notes: noteStr
-    });
+    }, 'branch_no,grade,production_date');
   }
   await loadBlockStockData();
   renderBlockStockPreserveState();
