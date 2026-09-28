@@ -3186,6 +3186,7 @@ function calcBlockStock(branchNo, grade, { confirmedOnly = false } = {}) {
   const base           = entries[0];
   const baseDate       = base.entry_date;
   const baseTimestamp  = base.entry_timestamp ? base.entry_timestamp.replace(' ','T').replace(/\+00$/, '+00:00') : null; // normalised UTC ISO
+  const baseMs         = baseTimestamp ? new Date(baseTimestamp).getTime() : null; // ms for reliable timestamp comparison
   const baseQty        = base.qty;
 
   // Production since base date.
@@ -3240,14 +3241,14 @@ function calcBlockStock(branchNo, grade, { confirmedOnly = false } = {}) {
   // legacy entries (backfilled to midnight NZT on migration).
   const jobCompletedAfterBase = (j) => {
     if (j.completime) {
-      // completime is now a full NZ-aware ISO timestamp in Supabase — compare
-      // directly against baseTimestamp (also UTC ISO). If no baseTimestamp
-      // (legacy entry), fall back to date prefix comparison.
-      return baseTimestamp
-        ? j.completime > baseTimestamp
-        : j.completime.slice(0, 10) >= baseDate;
+      // Parse completime as a Date for reliable cross-timezone comparison
+      const cts = j.completime.replace(' ', 'T').replace(/\+00$/, '+00:00');
+      const ctMs = new Date(cts).getTime();
+      if (!isNaN(ctMs)) {
+        return baseMs != null ? ctMs > baseMs : j.completime.slice(0, 10) >= baseDate;
+      }
+      return baseMs != null ? false : j.completime.slice(0, 10) >= baseDate;
     }
-    // finishdate is still a plain date string — date-only comparison only
     return (j.finishdate || '') >= baseDate;
   };
 
@@ -3292,9 +3293,8 @@ function calcBlockStock(branchNo, grade, { confirmedOnly = false } = {}) {
       const transAfterBase = (t) => {
         if (t.posttime) {
           const ts = t.posttime.replace(' ', 'T').replace(/\+00$/, '+00:00');
-          return baseTimestamp
-            ? ts > baseTimestamp
-            : fmtDateLocal(new Date(ts)) >= baseDate;
+          const tMs = new Date(ts).getTime();
+          if (!isNaN(tMs)) return baseMs != null ? tMs > baseMs : fmtDateLocal(new Date(ts)) >= baseDate;
         }
         return (t.transdate || '') >= baseDate;
       };
@@ -3321,7 +3321,7 @@ function calcBlockStock(branchNo, grade, { confirmedOnly = false } = {}) {
   }
 
   const current = baseQty + produced + adjustments - usedBlocks + transferMovement;
-  return { baseQty, baseDate, baseTimestamp, produced, adjustments, usedBlocks, transferMovement, current };
+  return { baseQty, baseDate, baseTimestamp, baseMs, produced, adjustments, usedBlocks, transferMovement, current };
 }
 
 // ── Auto-forecast engine ──────────────────────────────────────────────────
@@ -3676,6 +3676,7 @@ function calcUnitStock(branchNo, productName, { confirmedOnly = false } = {}) {
   const base          = entries[0];
   const baseDate      = base.entry_date;
   const baseTimestamp = base.entry_timestamp ? base.entry_timestamp.replace(' ','T').replace(/\+00$/, '+00:00') : null;
+  const baseMs        = baseTimestamp ? new Date(baseTimestamp).getTime() : null;
   const baseQty       = base.qty;
 
   // Production since base date — same day-by-day walk as calcBlockStock,
@@ -3716,14 +3717,9 @@ function calcUnitStock(branchNo, productName, { confirmedOnly = false } = {}) {
 
   const transAfterBase = (t) => {
     if (t.posttime) {
-      // Normalise: Supabase sometimes returns '2026-07-22 20:21:04+00' (space
-      // separator) instead of '2026-07-22T20:21:04+00' — new Date() handles
-      // the ISO 'T' form reliably across all browsers; space form may return
-      // Invalid Date on some environments.
       const ts = t.posttime.replace(' ', 'T').replace(/\+00$/, '+00:00');
-      return baseTimestamp
-        ? ts > baseTimestamp
-        : fmtDateLocal(new Date(ts)) >= baseDate;
+      const tMs = new Date(ts).getTime();
+      if (!isNaN(tMs)) return baseMs != null ? tMs > baseMs : fmtDateLocal(new Date(ts)) >= baseDate;
     }
     return (t.transdate || '') >= baseDate;
   };
@@ -3755,9 +3751,9 @@ function calcUnitStock(branchNo, productName, { confirmedOnly = false } = {}) {
     // or branch location mapping hasn't synced yet.
     const jobCompletedAfterBase = (j) => {
       if (j.completime) {
-        return baseTimestamp
-          ? j.completime > baseTimestamp
-          : fmtDateLocal(new Date(j.completime)) >= baseDate;
+        const cts = j.completime.replace(' ', 'T').replace(/\+00$/, '+00:00');
+        const ctMs = new Date(cts).getTime();
+        if (!isNaN(ctMs)) return baseMs != null ? ctMs > baseMs : fmtDateLocal(new Date(cts)) >= baseDate;
       }
       return (j.finishdate || '') >= baseDate;
     };
@@ -3778,7 +3774,7 @@ function calcUnitStock(branchNo, productName, { confirmedOnly = false } = {}) {
   }
 
   const current = baseQty + produced + adjustments - usedUnits;
-  return { baseQty, baseDate, baseTimestamp, produced, adjustments, usedBlocks: usedUnits,
+  return { baseQty, baseDate, baseTimestamp, baseMs, produced, adjustments, usedBlocks: usedUnits,
            salesUnits, creditUnits, transferNet, current };
 }
 
@@ -4138,7 +4134,7 @@ async function renderBlockStock(silent) {
                     .map(p=>({date:p.production_date,timestamp:p.created_at||null,type:'produced',qty:p.qty,note:p.notes||'Production',id:p.id,table:'block_production'})),
                   ...blockAdjustments.filter(a=>Number(a.branch_no)===bn&&a.grade===grade)
                     .map(a=>({date:a.adjustment_date,timestamp:a.created_at||null,type:'adjust',qty:a.qty,note:a.reason||'Adjustment',id:a.id,table:'block_adjustments'})),
-                  ...schedule.filter(j=>( Number(j.iscomplete)===1||Number(j.iscomplete)===2)&&stock&&(j.completime ? (stock.baseTimestamp ? j.completime > stock.baseTimestamp : fmtDateLocal(new Date(j.completime)) >= stock.baseDate) : (j.finishdate||'') >= stock.baseDate)).flatMap(j=>{
+                  ...schedule.filter(j=>( Number(j.iscomplete)===1||Number(j.iscomplete)===2)&&stock).flatMap(j=>{
                     const m=mMap[Number(j.machineno)];
                     if(!m||Number(m.branchno)!==bn) return [];
                     const sl=slMap[Number(j.line_seqno)]; if(!sl) return [];
@@ -4159,8 +4155,7 @@ async function renderBlockStock(silent) {
                     return unitStockTrans.filter(t=>{
                       if(Number(t.transtype)!==2||!gradeStockCodes.has((t.stockcode||'').trim())) return false;
                       if(Number(t.location)!==locNo) return false;
-                      if(t.posttime){const ts=t.posttime.replace(' ','T').replace(/\+00$/,'+00:00');return stock.baseTimestamp?ts>stock.baseTimestamp:fmtDateLocal(new Date(ts))>=stock.baseDate;}
-                      return (t.transdate||'')>=stock.baseDate;
+                      return true;
                     }).map(t=>{
                       const qty=parseFloat(t.quantity)||0;
                       const st=stockItems.find(s=>s.stockcode===(t.stockcode||'').trim());
@@ -4490,8 +4485,7 @@ async function renderUnitProducts(silent) {
                     // want the row where location=locNo to avoid double-counting.
                     // Positive qty at locNo = transfer IN, negative = transfer OUT or sale.
                     if (tLoc !== locNo) return false;
-                    if (t.posttime) { const ts=t.posttime.replace(' ','T').replace(/\+00$/,'+00:00'); return stock.baseTimestamp ? ts > stock.baseTimestamp : fmtDateLocal(new Date(ts)) >= stock.baseDate; }
-                    return (t.transdate||'') >= stock.baseDate;
+                    return true;
                   }).map(t => {
                     const qty = parseFloat(t.quantity) || 0;
                     const tLoc = Number(t.location);
