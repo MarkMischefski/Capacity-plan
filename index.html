@@ -1453,7 +1453,7 @@ async function saveTodayProduction(itemType, key, dateStr, qty) {
   await sbInsert(table, { branch_no: Number(bn), [keyField]: key, production_date: dateStr, qty: qtyInt, notes: 'Actual production' });
 
   showToast('Saved');
-  await loadAllData();
+  await loadAllData(true);
   renderTodayPage();
 }
 
@@ -1511,7 +1511,7 @@ async function saveStocktakeFromPage(itemType, key, qty, inputEl) {
 
   if (ok) {
     showToast('Stocktake saved');
-    await loadAllData();
+    await loadAllData(true);
     renderStocktakePage();
   } else {
     showToast('Save failed — check connection');
@@ -1534,7 +1534,7 @@ async function saveDayForecast(grade, dateStr, qty, isFuture) {
     await sbUpsert('block_production', { branch_no: Number(bn), grade, production_date: dateStr, qty: qtyInt, notes: noteStr }, 'branch_no,grade,production_date');
   }
   showToast('Saved');
-  await loadAllData();
+  await loadAllData(true);
   renderContent();
 }
 
@@ -1554,7 +1554,7 @@ async function saveUnitDayForecast(productName, dateStr, qty, isFuture) {
     await sbUpsert('unit_production', { branch_no: Number(bn), product_name: productName, production_date: dateStr, qty: qtyInt, notes: noteStr }, 'branch_no,product_name,production_date');
   }
   showToast('Saved');
-  await loadAllData();
+  await loadAllData(true);
   renderContent();
 }
 
@@ -1654,7 +1654,7 @@ async function saveModal() {
   if (ok) {
     closeModal();
     showToast('Saved');
-    await loadAllData();
+    await loadAllData(true);
     renderContent();
   } else {
     showToast('Save failed — check connection');
