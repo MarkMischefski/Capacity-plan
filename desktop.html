@@ -4305,9 +4305,10 @@ async function renderUnitProducts(silent) {
         let totalUnits = 0;
         const unitsByDay = {};
         wk.workDays.forEach(d => { unitsByDay[d] = 0; });
-        const windowForOverdueCheck = wk.offset === 0 ? wk.workDays : null;
         // Query sales lines directly — bypasses schedule jobs so requirements
         // appear even when no job exists or job is already complete.
+        // Unit products: always use raw duedate for week placement — never pull
+        // overdue items into the current week via effectiveJobDate.
         salesLines.filter(sl => {
           if (Number(sl.branchno) !== bn) return false;
           if (!codes.includes((sl.linked_stockcode||'').trim())) return false;
@@ -4316,16 +4317,10 @@ async function renderUnitProducts(silent) {
         }).forEach(sl => {
           const effectiveDate = parseDate(sl.duedate);
           if (!effectiveDate) return;
-          let dStr;
-          if (windowForOverdueCheck) {
-            dStr = effectiveJobDate(effectiveDate, windowForOverdueCheck);
-            if (!wk.workDays.includes(dStr)) return;
-          } else {
-            const wkStart = wk.workDays[0];
-            const wkEnd   = wk.workDays[wk.workDays.length - 1];
-            if (effectiveDate < wkStart || effectiveDate > wkEnd) return;
-            dStr = wk.workDays.includes(effectiveDate) ? effectiveDate : wk.workDays[0];
-          }
+          const wkStart = wk.workDays[0];
+          const wkEnd   = wk.workDays[wk.workDays.length - 1];
+          if (effectiveDate < wkStart || effectiveDate > wkEnd) return;
+          const dStr = wk.workDays.includes(effectiveDate) ? effectiveDate : wk.workDays[0];
           const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
           const units = Math.max(0, lq);
           totalUnits += units;
