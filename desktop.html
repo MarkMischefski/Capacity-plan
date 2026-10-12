@@ -3644,7 +3644,16 @@ function getUnitActualProduction(bn, productName, dateStr) {
 function getUnitForecastForWeek(bn, productName, workDayDates) {
   const today = todayLocal();
   return workDayDates.reduce((sum, d) => {
-    if (d <= today) return sum;
+    if (d < today) return sum;  // past days excluded
+    // Today: include only if no actual has been recorded yet.
+    // calcUnitStock walks through today and bakes in any actual entry,
+    // so if an actual exists for today it's already in currentStock — don't add it again.
+    if (d === today) {
+      const actual = getUnitActualProduction(bn, productName, d);
+      if (actual !== null) return sum;  // already in currentStock
+      return sum + getUnitTemplateQty(bn, productName, d);
+    }
+    // Future days: use actual override if set, else template
     const actual = getUnitActualProduction(bn, productName, d);
     const qty    = actual !== null ? actual.qty : getUnitTemplateQty(bn, productName, d);
     return sum + qty;
@@ -4038,8 +4047,8 @@ async function renderBlockStock(silent) {
         // earlier excluded, since currentStock already accounts for those) —
         // NOT isPast, which only means "before this whole week" and would
         // double-count today/earlier-this-week production otherwise.
-        const dailyBalances = wk.days.map(({d, qty, isPast, isFuture, dayReqShare}) => {
-          const dayFcast = isFuture ? qty : 0;
+        const dailyBalances = wk.days.map(({d, qty, isPast, isToday, isFuture, dayReqShare}) => {
+          const dayFcast = (isFuture || isToday) ? qty : 0;
           dayBal = dayBal + dayFcast - dayReqShare;
           const col = dayBal >= 0 ? 'var(--green)' : 'var(--red)';
           return `<div style="width:46px;text-align:center;font-family:var(--mono);font-size:9px;font-weight:600;color:${col};opacity:${isPast?'0.35':'1'};">${Math.round(dayBal)>=0?'+':''}${Math.round(dayBal)}</div>`;
@@ -4337,9 +4346,10 @@ async function renderUnitProducts(silent) {
           const isFuture = d > today;
           const qty = actual !== null ? actual.qty : tmpl;
           const isOverride = isFuture && actual !== null;
+          const todayActualRecorded = isToday && actual !== null;
           const dayReqShare = totalUnits > 0 ? required * (unitsByDay[d] / totalUnits) : 0;
           dailyTotals[d] = (dailyTotals[d] || 0) + qty;
-          return { d, qty, isOverride, isPast, isToday, isFuture, dayReqShare };
+          return { d, qty, isOverride, isPast, isToday, isFuture, dayReqShare, todayActualRecorded };
         });
         return { ...wk, required, forecast, days };
       });
@@ -4391,8 +4401,8 @@ async function renderUnitProducts(silent) {
           </div>`;
         }).join('');
 
-        const dailyBalances = wk.days.map(({d, qty, isPast, isFuture, dayReqShare}) => {
-          const dayFcast = isFuture ? qty : 0;
+        const dailyBalances = wk.days.map(({d, qty, isPast, isToday, isFuture, dayReqShare, todayActualRecorded}) => {
+          const dayFcast = isFuture ? qty : (isToday && !todayActualRecorded) ? qty : 0; // today only if no actual yet (actual already in currentStock)
           dayBal = dayBal + dayFcast - dayReqShare;
           const col = dayBal >= 0 ? 'var(--green)' : 'var(--red)';
           return `<div style="width:46px;text-align:center;font-family:var(--mono);font-size:9px;font-weight:600;color:${col};opacity:${isPast?'0.35':'1'};">${Math.round(dayBal)>=0?'+':''}${Math.round(dayBal)}</div>`;
