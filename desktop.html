@@ -4056,7 +4056,9 @@ async function renderBlockStock(silent) {
         // NOT isPast, which only means "before this whole week" and would
         // double-count today/earlier-this-week production otherwise.
         const dailyBalances = wk.days.map(({d, qty, isPast, isToday, isFuture, dayReqShare}) => {
-          const dayFcast = (isFuture || isToday) ? qty : 0;
+          // currentStock already includes today's actual production via calcBlockStock,
+          // so only count future days here — same boundary as getForecastForWeek.
+          const dayFcast = isFuture ? qty : 0;
           dayBal = dayBal + dayFcast - dayReqShare;
           const col = dayBal >= 0 ? 'var(--green)' : 'var(--red)';
           return `<div style="width:46px;text-align:center;font-family:var(--mono);font-size:9px;font-weight:600;color:${col};opacity:${isPast?'0.35':'1'};">${Math.round(dayBal)>=0?'+':''}${Math.round(dayBal)}</div>`;
