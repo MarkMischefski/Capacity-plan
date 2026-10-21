@@ -2193,13 +2193,15 @@ function renderMaterials() {
   const salesLineMap = Object.fromEntries(salesLines.map(l => [Number(l.solineid), l]));
   const machineMap   = Object.fromEntries(machines.map(m => [Number(m.seqno), m]));
 
-  // Filter schedule to planned/partial within 4-week window
+  // Filter schedule to planned/partial within 4-week window.
+  // Overdue jobs (startdate before today) are clamped into week 0 via effectiveJobDate.
   const windowEnd = weeks[3].workDays[weeks[3].workDays.length - 1];
-  let filtered = schedule.filter(j =>
-    (Number(j.iscomplete) === 0 || Number(j.iscomplete) === 4) &&
-    j.startdate >= today &&
-    j.startdate <= windowEnd
-  );
+  const week0Days = weeks[0].workDays;
+  let filtered = schedule.filter(j => {
+    if (Number(j.iscomplete) !== 0 && Number(j.iscomplete) !== 4) return false;
+    const eff = effectiveJobDate(parseDate(j.startdate), week0Days);
+    return eff <= windowEnd;
+  });
   if (branchFilter !== 'all') {
     const machineSet = new Set(machines.filter(m => m.branchno == branchFilter).map(m => Number(m.seqno)));
     filtered = filtered.filter(j => machineSet.has(Number(j.machineno)));
@@ -2209,7 +2211,7 @@ function renderMaterials() {
   const acc = {}; // [weekIdx][branchno][grade] = cubic
 
   filtered.forEach(j => {
-    const dateStr  = parseDate(j.startdate);
+    const dateStr  = effectiveJobDate(parseDate(j.startdate), week0Days);
     const weekIdx  = weeks.findIndex(w => w.workDays.includes(dateStr));
     if (weekIdx === -1) return;
 
@@ -3942,12 +3944,7 @@ async function renderBlockStock(silent) {
         schedule.filter(j => {
           if (Number(j.iscomplete) !== 0 && Number(j.iscomplete) !== 4) return false;
           const jDate = parseDate(j.startdate);
-          if (windowForOverdueCheck) {
-            const eff = effectiveJobDate(jDate, windowForOverdueCheck);
-            // Only count jobs from today forward — a fresh stock count already
-            // reflects Mon/Tue consumption, so exclude those days' requirements.
-            return eff >= today && eff <= wk.workDays[wk.workDays.length-1];
-          }
+          if (windowForOverdueCheck) return effectiveJobDate(jDate, windowForOverdueCheck) <= wk.workDays[wk.workDays.length-1];
           return wk.workDays.includes(jDate);
         }).forEach(j => {
           const m = mMap[Number(j.machineno)];
@@ -4339,9 +4336,6 @@ async function renderUnitProducts(silent) {
           const wkStart = wk.workDays[0];
           const wkEnd   = wk.workDays[wk.workDays.length - 1];
           if (effectiveDate < wkStart || effectiveDate > wkEnd) return;
-          // For the current week, exclude jobs due before today — a stock count
-          // entered today already reflects those days' consumption.
-          if (wk.offset === 0 && effectiveDate < today) return;
           const dStr = wk.workDays.includes(effectiveDate) ? effectiveDate : wk.workDays[0];
           const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
           const units = Math.max(0, lq);
