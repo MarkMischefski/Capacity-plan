@@ -3942,7 +3942,12 @@ async function renderBlockStock(silent) {
         schedule.filter(j => {
           if (Number(j.iscomplete) !== 0 && Number(j.iscomplete) !== 4) return false;
           const jDate = parseDate(j.startdate);
-          if (windowForOverdueCheck) return effectiveJobDate(jDate, windowForOverdueCheck) <= wk.workDays[wk.workDays.length-1];
+          if (windowForOverdueCheck) {
+            const eff = effectiveJobDate(jDate, windowForOverdueCheck);
+            // Only count jobs from today forward — a fresh stock count already
+            // reflects Mon/Tue consumption, so exclude those days' requirements.
+            return eff >= today && eff <= wk.workDays[wk.workDays.length-1];
+          }
           return wk.workDays.includes(jDate);
         }).forEach(j => {
           const m = mMap[Number(j.machineno)];
@@ -3989,7 +3994,10 @@ async function renderBlockStock(silent) {
       if (!stock && totalReq === 0) return null;
 
       const currentStock = stock ? stock.current : 0;
-      const stockCol     = currentStock <= 0 ? 'var(--red)' : currentStock < totalReq ? 'var(--amber)' : 'var(--green)';
+      // Compare stock against THIS week's required only — future weeks will be
+      // covered by scheduled production, not current stock on hand.
+      const thisWeekReq  = weekData[0]?.required ?? 0;
+      const stockCol     = currentStock <= 0 ? 'var(--red)' : currentStock < thisWeekReq ? 'var(--amber)' : 'var(--green)';
       const cardId = `bsc-${bn}-${grade.replace(/\s+/g,'_')}`; // kept for potential future use
       const autoFc = getAutoForecastSettings(bn, grade);
 
@@ -4329,6 +4337,9 @@ async function renderUnitProducts(silent) {
           const wkStart = wk.workDays[0];
           const wkEnd   = wk.workDays[wk.workDays.length - 1];
           if (effectiveDate < wkStart || effectiveDate > wkEnd) return;
+          // For the current week, exclude jobs due before today — a stock count
+          // entered today already reflects those days' consumption.
+          if (wk.offset === 0 && effectiveDate < today) return;
           const dStr = wk.workDays.includes(effectiveDate) ? effectiveDate : wk.workDays[0];
           const lq = (parseFloat(sl.ord_quant)||0)-(parseFloat(sl.sup_quant)||0);
           const units = Math.max(0, lq);
@@ -4358,7 +4369,10 @@ async function renderUnitProducts(silent) {
       if (!stock && totalReq === 0) return null;
 
       const currentStock = stock ? stock.current : 0;
-      const stockCol     = currentStock <= 0 ? 'var(--red)' : currentStock < totalReq ? 'var(--amber)' : 'var(--green)';
+      // Compare stock against THIS week's required only — future weeks will be
+      // covered by scheduled production, not current stock on hand.
+      const thisWeekReq  = weekData[0]?.required ?? 0;
+      const stockCol     = currentStock <= 0 ? 'var(--red)' : currentStock < thisWeekReq ? 'var(--amber)' : 'var(--green)';
       const cardId = `upc-${bn}-${productName.replace(/\s+/g,'_')}`;
       // Branch → ERP location number for STOCK_TRANS filtering
       const locMap = Object.fromEntries(branchLocations.map(r => [Number(r.branch_no), Number(r.location_no)]));
