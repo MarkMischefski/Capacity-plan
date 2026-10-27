@@ -1130,8 +1130,8 @@
 
         <div class="settings-card" style="max-width:900px;margin-bottom:20px;">
           <div class="settings-card-header" style="display:flex;align-items:center;justify-content:space-between;">
-            <span>Machine Visibility</span>
-            <span style="font-size:11px;color:var(--muted);font-weight:400;">Unchecked machines are hidden from all views and excluded from calculations</span>
+            <span>Machine Visibility &amp; Block Forecast</span>
+            <span style="font-size:11px;color:var(--muted);font-weight:400;">Visibility hides from views; Block Forecast controls block stock calculations</span>
           </div>
           <div class="settings-card-body" id="machine-visibility-list"></div>
         </div>
@@ -1398,6 +1398,42 @@ function applyLocalOverrides() {
     const saved = JSON.parse(localStorage.getItem('expol_capacity_local_overrides') || 'null');
     if (saved) settings = { ...settings, ...saved };
   } catch(e) {}
+}
+
+// Save block_moulder flag directly to capacity_machines in Supabase
+async function saveBlockMoulder(seqno, value, checkbox) {
+  if (!settings.supaUrl || !settings.supaKey) {
+    alert('Connect to Supabase first.');
+    checkbox.checked = !value; // revert
+    return;
+  }
+  checkbox.disabled = true;
+  try {
+    // Use return=representation so we can verify the row actually changed
+    const res = await fetch(
+      `${settings.supaUrl}/rest/v1/capacity_machines?seqno=eq.${seqno}`,
+      {
+        method: 'PATCH',
+        headers: { ...supaHeaders(), 'Content-Type': 'application/json', 'Prefer': 'return=representation' },
+        body: JSON.stringify({ block_moulder: value })
+      }
+    );
+    const body = await res.json().catch(() => null);
+    console.log('[saveBlockMoulder] status:', res.status, 'seqno:', seqno, 'value:', value, 'response:', body);
+    if (!res.ok) throw new Error(JSON.stringify(body));
+    // Check the returned row actually has the new value
+    if (!Array.isArray(body) || body.length === 0) {
+      throw new Error(`PATCH matched 0 rows — seqno ${seqno} not found or blocked by RLS`);
+    }
+    // Update local machines array so re-render reflects change
+    const m = machines.find(m => Number(m.seqno) === seqno);
+    if (m) m.block_moulder = value;
+  } catch(e) {
+    console.error('Failed to save block_moulder:', e);
+    alert('Failed to save — check console.');
+    checkbox.checked = !value; // revert on error
+  }
+  checkbox.disabled = false;
 }
 
 // Clears all local overrides for this device, reverting back to whatever
@@ -5265,18 +5301,33 @@ function renderSettings() {
       <div class="machine-list-branch">
         <div class="machine-list-branch-label">${branchName(b)}</div>
         <div class="machine-list-items">
+          <div class="machine-toggle-row" style="pointer-events:none;opacity:0.5;font-size:10px;text-transform:uppercase;letter-spacing:.05em;padding:2px 8px 4px;">
+            <span style="flex:0 0 20px;"></span>
+            <span style="flex:1;">Machine</span>
+            <span style="flex:0 0 20px;text-align:center;">Visible</span>
+            <span style="flex:0 0 90px;text-align:center;">Block forecast</span>
+          </div>
           ${machinesByBranch[b].map(m => {
             const isExcluded = excluded.has(Number(m.seqno));
             const isInactive = !isActive(m);
+            const blockMoulder = m.block_moulder !== false;
             return `
-              <label class="machine-toggle-row ${isExcluded ? 'excluded' : ''}">
+              <div class="machine-toggle-row ${isExcluded ? 'excluded' : ''}" data-seqno="${m.seqno}" style="display:flex;align-items:center;gap:8px;">
                 <input type="checkbox" class="machine-toggle"
                   data-seqno="${m.seqno}"
                   ${isExcluded ? '' : 'checked'}
-                  onchange="this.closest('.machine-toggle-row').classList.toggle('excluded', !this.checked)">
-                <span class="mt-name">${m.machine_name}${isInactive ? ' <span style="color:var(--faint);font-size:10px;">(inactive)</span>' : ''}</span>
-                <span class="mt-id">#${m.seqno}</span>
-              </label>`;
+                  style="flex:0 0 auto;"
+                  onchange="this.closest('[data-seqno]').classList.toggle('excluded', !this.checked)">
+                <span class="mt-name" style="flex:1;">${m.machine_name}${isInactive ? ' <span style="color:var(--faint);font-size:10px;">(inactive)</span>' : ''}</span>
+                <span class="mt-id" style="flex:0 0 auto;">#${m.seqno}</span>
+                <label style="flex:0 0 90px;display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;" title="Include in block stock forecast">
+                  <input type="checkbox" class="block-moulder-toggle"
+                    data-seqno="${m.seqno}"
+                    ${blockMoulder ? 'checked' : ''}
+                    onchange="saveBlockMoulder(${m.seqno}, this.checked, this)">
+                  <span style="font-size:11px;color:var(--muted);">Block</span>
+                </label>
+              </div>`;
           }).join('')}
         </div>
       </div>`).join('') || '<div style="color:var(--faint);font-size:13px;">Load data first — machines appear after connecting to Supabase.</div>';
